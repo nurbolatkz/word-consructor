@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Конструктор приказов — Word Constructor</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --shadow: 0 10px 30px rgba(15,23,42,.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #eef2f6 0%, var(--bg) 180px);
+    }
+
+    .shell { max-width: 900px; margin: 0 auto; padding: 32px 24px 56px; }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .back-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .hero, .card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 28px 32px;
+      margin-bottom: 20px;
+    }
+
+    .hero h1 { margin: 0 0 10px; font-size: 28px; font-weight: 700; }
+    .hero p  { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border: 1px solid #c8d5e2;
+      border-radius: 999px;
+      background: #eef4f9;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 12px;
+    }
+
+    .card { padding: 24px 28px; margin-bottom: 18px; }
+    .card h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; }
+
+    .endpoint {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #f0f5fa;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 14px;
+    }
+
+    .method {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 5px;
+      background: var(--accent);
+      color: #fff;
+      white-space: nowrap;
+    }
+
+    .method.patch { background: #d97706; }
+
+    .path {
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 13px;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    pre {
+      background: #1a2e42;
+      color: #d1e8ff;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 12.5px;
+      font-family: "Consolas", "Courier New", monospace;
+      overflow-x: auto;
+      line-height: 1.6;
+      margin: 10px 0;
+    }
+
+    .prop-list {
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.85;
+      padding-left: 20px;
+    }
+
+    .prop-list code {
+      font-family: "Consolas", monospace;
+      background: #eef2f6;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    /* Test form */
+    .form-row { margin-bottom: 14px; }
+
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+
+    input[type="file"],
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: "Consolas", monospace;
+      background: #fafbfc;
+      color: var(--text);
+    }
+
+    textarea { resize: vertical; min-height: 90px; }
+
+    .btn-submit {
+      padding: 9px 22px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-submit:hover { background: var(--accent-dark); }
+
+    .result-box {
+      margin-top: 14px;
+      padding: 12px 16px;
+      background: #e8f5e9;
+      border: 1px solid #a5d6a7;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+    }
+
+    .result-box a {
+      display: inline-block;
+      margin-top: 8px;
+      color: var(--accent);
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .error-box {
+      margin-top: 14px;
+      padding: 12px 16px;
+      background: #fdecea;
+      border: 1px solid #f5c6cb;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+    }
+
+    .divider { border: none; border-top: 1px solid var(--line); margin: 20px 0; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <a class="back-link" href="/">← Все сервисы</a>
+  </div>
+
+  <div class="hero">
+    <div class="badge">Word</div>
+    <h1>Конструктор приказов</h1>
+    <p>
+      Сервис принимает шаблон Word-документа (<code>.docx</code>) с плейсхолдерами
+      вида <code>{{ключ}}</code> и параметры из 1С, автоматически заполняет документ
+      и открывает редактор, где пользователь может изменить значения перетаскиванием
+      или вручную, а затем скачать готовый файл.
+    </p>
+  </div>
+
+  <!-- Template builder link -->
+  <div class="card" style="padding:20px 28px;display:flex;align-items:center;gap:16px;margin-bottom:18px">
+    <div style="flex:1">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:4px">Новый инструмент</div>
+      <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">Конструктор шаблонов</div>
+      <div style="font-size:13px;color:var(--muted)">Откройте или создайте документ в OnlyOffice, работайте с реальным <code>.docx</code> и вставляйте параметры в формате <code>[Ключ]</code>.</div>
+    </div>
+    <a href="/services/word-constructor/template-builder"
+       style="padding:9px 22px;background:var(--accent);color:#fff;border-radius:8px;text-decoration:none;font-size:14px;font-weight:700;white-space:nowrap">
+      Открыть →
+    </a>
+  </div>
+
+  <!-- API docs -->
+  <div class="card">
+    <h2>API для 1С</h2>
+
+    <div class="endpoint">
+      <span class="method">POST</span>
+      <span class="path">/services/word-constructor/api/create</span>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:8px;">
+      Создать сессию: передать шаблон и начальные параметры.
+      Тип запроса: <code>multipart/form-data</code>
+    </p>
+    <ul class="prop-list">
+      <li><code>template</code> — файл <code>.docx</code> с плейсхолдерами <code>{{ключ}}</code></li>
+      <li><code>params</code> — JSON-строка: <code>{"ФИО": "Алексей Иванов", "Должность": "Менеджер"}</code></li>
+    </ul>
+    <pre>{
+  "id": "a3f8c...",
+  "editor_url": "/services/word-constructor/editor/a3f8c...",
+  "expires_at": "2026-04-10T14:00:00+00:00"
+}</pre>
+
+    <hr class="divider">
+
+    <div class="endpoint">
+      <span class="method patch">PATCH / POST</span>
+      <span class="path">/services/word-constructor/api/sessions/{id}/params</span>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:8px;">
+      Добавить или обновить параметры в открытой сессии — документ в редакторе
+      <strong>не перерисовывается</strong>, обновляется только панель параметров.
+      Тело: <code>application/json</code>
+    </p>
+    <pre>POST /api/sessions/a3f8c.../params
+Content-Type: application/json
+
+{"Приказ №": "47-К", "Дата": "10.04.2026"}</pre>
+    <pre>{
+  "params_version": 2,
+  "params": { "ФИО": "Алексей Иванов", "Приказ №": "47-К", "Дата": "10.04.2026" }
+}</pre>
+  </div>
+
+  <!-- Test form -->
+  <div class="card">
+    <h2>Тест — загрузить шаблон вручную</h2>
+
+    <form id="testForm">
+      <div class="form-row">
+        <label>Шаблон Word (.docx)</label>
+        <input type="file" id="templateFile" accept=".docx" required>
+      </div>
+      <div class="form-row">
+        <label>Параметры (JSON)</label>
+        <textarea id="paramsJson" placeholder='{"ФИО": "Алексей Иванов", "Должность": "Менеджер"}'>{}</textarea>
+      </div>
+      <button type="submit" class="btn-submit">Создать сессию</button>
+    </form>
+
+    <div class="result-box" id="resultBox">
+      Сессия создана.
+      <br>
+      <a id="editorLink" href="#" target="_blank">Открыть редактор →</a>
+    </div>
+    <div class="error-box" id="errorBox"></div>
+  </div>
+
+</div>
+<script>
+document.getElementById('testForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const resultBox = document.getElementById('resultBox');
+  const errorBox  = document.getElementById('errorBox');
+  resultBox.style.display = 'none';
+  errorBox.style.display  = 'none';
+
+  const file = document.getElementById('templateFile').files[0];
+  if (!file) return;
+
+  const fd = new FormData();
+  fd.append('template', file);
+  fd.append('params', document.getElementById('paramsJson').value.trim() || '{}');
+
+  try {
+    const res  = await fetch('/services/word-constructor/api/create', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      errorBox.textContent = 'Ошибка: ' + (data.error || res.statusText);
+      errorBox.style.display = 'block';
+      return;
+    }
+    document.getElementById('editorLink').href = data.editor_url;
+    resultBox.style.display = 'block';
+  } catch (err) {
+    errorBox.textContent = 'Ошибка: ' + err.message;
+    errorBox.style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>

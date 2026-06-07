@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KazUni — Конструктор шаблонов</title>
+  <script src="/onlyoffice/web-apps/apps/api/documents/api.js"></script>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --surface: #fff;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --chip-bg: #f0f5fa;
+      --shadow: 0 10px 30px rgba(15,23,42,.06);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Topbar ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      background: rgba(255,255,255,.95);
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+      z-index: 20;
+    }
+    .back-link {
+      color: var(--accent); text-decoration: none;
+      font-size: 13px; font-weight: 700; white-space: nowrap;
+    }
+    .topbar-meta { flex: 1; min-width: 0; }
+    .topbar-title { font-size: 15px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
+    .topbar-sub   { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .btn {
+      padding: 7px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 13px; font-weight: 600;
+      background: var(--surface); color: var(--text);
+      cursor: pointer; white-space: nowrap;
+      transition: background 120ms;
+    }
+    .btn:hover:not(:disabled) { background: var(--bg); }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+    .btn-green { background: #217346; color: #fff; border-color: #217346; }
+    .btn-green:hover:not(:disabled) { background: #1a5c38; }
+
+    /* ── Workspace ── */
+    .workspace {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* ── OnlyOffice shell ── */
+    .editor-shell {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #oo-container {
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* ── Success overlay (Send to 1C done) ── */
+    #readyOverlay {
+      display: none;
+      position: fixed; inset: 0; z-index: 9000;
+      background: rgba(255,255,255,.97);
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 18px;
+    }
+    #readyOverlay.show { display: flex; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 22px; right: 22px;
+      max-width: 360px; padding: 11px 16px;
+      border-radius: 10px; background: #1a2e42; color: #e8f2ff;
+      font-size: 13px; z-index: 9999; display: none;
+    }
+    #toast.error { background: #b42318; color: #fff; }
+
+    #uploadInput { display: none; }
+
+  </style>
+</head>
+<body>
+
+<input type="file" id="uploadInput" accept=".docx">
+
+<!-- Topbar -->
+<div class="topbar">
+  <a class="back-link" id="backLink" href="/services/word-constructor">← Назад</a>
+  <div class="topbar-meta">
+    <div class="topbar-title">KazUni — Конструктор шаблонов</div>
+    <div class="topbar-sub" id="topbarSub">{{ filename }} · сессия до {{ expires_at }}</div>
+  </div>
+  <button class="btn" id="btnUpload">Открыть .docx</button>
+  <button class="btn btn-primary" id="btnDownload">⬇ Скачать шаблон</button>
+  <button class="btn btn-green" id="btnSendTo1c" style="display:none">✓ Отправить в 1С</button>
+</div>
+
+<!-- Workspace -->
+<div class="workspace">
+
+  <!-- OnlyOffice editor (full width) -->
+  <div class="editor-shell" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+    <div id="oo-container" style="flex:1;min-height:0;"></div>
+  </div>
+
+</div>
+
+<!-- Success overlay -->
+<div id="readyOverlay">
+  <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+    <circle cx="36" cy="36" r="36" fill="#217346"/>
+    <path d="M20 37l12 12 20-20" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <div style="font-size:22px;font-weight:700;color:#1a2e42;">Шаблон отправлен в 1С</div>
+  <div style="font-size:14px;color:#5c6b7a;">Можно закрыть это окно.</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── session data from server ── */
+  var SESSION_ID     = {{ session_id    | tojson }};
+  var SESSION_PARAMS = {{ session_params| tojson }};
+
+  // Let the OO plugin read session_id even if its URL query param was lost
+  try { localStorage.setItem("oo_session_id", SESSION_ID); } catch(_) {}
+  var FILENAME       = {{ filename      | tojson }};
+  var WS_URL         = {{ websocket_url | tojson }};
+
+  var from1c = new URLSearchParams(location.search).get("source") === "from1c";
+
+  var BASE   = "/services/word-constructor/api/template-builder/" + SESSION_ID;
+  var OO_CFG_URL   = BASE + "/onlyoffice/config";
+  var FORCESAVE_URL= BASE + "/forcesave";
+  var REPLACE_URL  = BASE + "/document";
+  var READY_URL    = BASE + "/ready";
+  var PARAMS_URL   = BASE + "/params";
+  var DOWNLOAD_URL = BASE + "/download";
+
+  /* ── state ── */
+  var params    = [];
+  var docEditor = null;
+  var connector = null;
+
+  /* ── helpers ── */
+  function showToast(msg, isError) {
+    var t = document.getElementById("toast");
+    t.textContent = msg;
+    t.className   = isError ? "error" : "";
+    t.style.display = "block";
+    clearTimeout(t._tid);
+    t._tid = setTimeout(function () { t.style.display = "none"; }, 3500);
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  function xhrJSON(method, url, body, cb) {
+    var req = new XMLHttpRequest();
+    req.open(method, url, true);
+    req.setRequestHeader("Content-Type", "application/json");
+    req.onload = function () {
+      var ok = req.status >= 200 && req.status < 300;
+      var data;
+      try { data = JSON.parse(req.responseText); } catch(e) { data = {}; }
+      cb(ok, data);
+    };
+    req.onerror = function () { cb(false, {}); };
+    req.send(body ? JSON.stringify(body) : null);
+  }
+
+  /* ── Patch OnlyOffice iframes with clipboard-read permission ──
+     Chrome 93+ requires allow="clipboard-read" even for same-origin iframes.
+     OnlyOffice creates its iframe dynamically via DocsAPI, so we intercept
+     it with a MutationObserver and set the allow attribute immediately.     */
+  (function patchClipboard() {
+    var container = document.getElementById("oo-container");
+    if (!container) return;
+
+    function grantClipboard(node) {
+      if (node.nodeType !== 1) return;
+      var frames = node.tagName === "IFRAME" ? [node] : Array.from(node.querySelectorAll("iframe"));
+      frames.forEach(function(f) {
+        var cur = f.getAttribute("allow") || "";
+        if (!cur.includes("clipboard-read")) {
+          f.setAttribute("allow", cur ? cur + "; clipboard-read; clipboard-write" : "clipboard-read; clipboard-write");
+        }
+      });
+    }
+
+    var obs = new MutationObserver(function(muts) {
+      muts.forEach(function(m) {
+        m.addedNodes.forEach(grantClipboard);
+      });
+    });
+    obs.observe(container, { childList: true, subtree: true });
+  })();
+
+  /* ── OnlyOffice init ── */
+  function initEditor() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", OO_CFG_URL, true);
+    xhr.onload = function () {
+      if (xhr.status !== 200) {
+        showToast("Ошибка загрузки конфигурации редактора (" + xhr.status + ")", true);
+        return;
+      }
+      var config = JSON.parse(xhr.responseText);
+
+      /* remove toolbar/menus we don't need for template building */
+      config.editorConfig = config.editorConfig || {};
+      config.editorConfig.customization = config.editorConfig.customization || {};
+      Object.assign(config.editorConfig.customization, {
+        autosave: true,
+        forcesave: true,
+        compactHeader: true,
+        hideRightMenu: true,
+        features: { tabStyle: "fill", tabBackground: "toolbar" },
+        uiTheme: "theme-white"
+      });
+
+      config.events = {
+        onDocumentReady: function () {
+          try {
+            connector = docEditor.createConnector();
+          } catch(e) {
+            /* connector not available — graceful degradation */
+          }
+        },
+        onError: function (evt) {
+          showToast("OnlyOffice: " + (evt && evt.data && evt.data.description || "ошибка"), true);
+        }
+      };
+
+      docEditor = new DocsAPI.DocEditor("oo-container", config);
+    };
+    xhr.onerror = function () {
+      showToast("Не удалось подключиться к редактору", true);
+    };
+    xhr.send();
+  }
+
+
+  /* ── params sync (notifies OO plugin panel to refresh) ── */
+  var OO_PARAMS_SYNC_KEY = "oo_params_sync";
+
+  function syncParams() {
+    xhrJSON("POST", PARAMS_URL, { params: params }, function () {
+      try { localStorage.setItem(OO_PARAMS_SYNC_KEY, String(Date.now())); } catch(e) {}
+    });
+  }
+
+  /* ── force save ── */
+  function forceSave(cb) {
+    xhrJSON("POST", FORCESAVE_URL, null, function (ok, data) {
+      if (!ok) {
+        showToast("Ошибка сохранения: " + (data.error || ""), true);
+        cb(false);
+      } else {
+        cb(true);
+      }
+    });
+  }
+
+  /* ── Upload base .docx ── */
+  document.getElementById("btnUpload").addEventListener("click", function () {
+    document.getElementById("uploadInput").click();
+  });
+  document.getElementById("uploadInput").addEventListener("change", function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+
+    var fd = new FormData();
+    fd.append("document", file, file.name);
+
+    var req = new XMLHttpRequest();
+    req.open("POST", REPLACE_URL, true);
+    req.onload = function () {
+      if (req.status >= 200 && req.status < 300) {
+        showToast("Документ загружен — перезагрузка редактора…", false);
+        setTimeout(function () { location.reload(); }, 1200);
+      } else {
+        showToast("Ошибка загрузки файла (" + req.status + ")", true);
+      }
+    };
+    req.onerror = function () { showToast("Ошибка сети при загрузке", true); };
+    req.send(fd);
+  });
+
+  /* ── Download template ── */
+  document.getElementById("btnDownload").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Сохранение…";
+    forceSave(function (ok) {
+      btn.disabled = false;
+      btn.textContent = "⬇ Скачать шаблон";
+      if (ok) {
+        var a = document.createElement("a");
+        a.href = DOWNLOAD_URL;
+        a.download = FILENAME;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    });
+  });
+
+  /* ── Send to 1C ── */
+  document.getElementById("btnSendTo1c").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Сохранение…";
+
+    forceSave(function (ok) {
+      if (!ok) { btn.disabled = false; btn.textContent = "✓ Отправить в 1С"; return; }
+      btn.textContent = "Отправка…";
+
+      xhrJSON("POST", READY_URL, { filename: FILENAME }, function (ok2) {
+        btn.disabled = false;
+        btn.textContent = "✓ Отправить в 1С";
+        if (ok2) {
+          document.getElementById("readyOverlay").classList.add("show");
+        } else {
+          showToast("Ошибка при отправке в 1С", true);
+        }
+      });
+    });
+  });
+
+  /* ── from1c mode ── */
+  if (from1c) {
+    document.getElementById("btnDownload").style.display = "none";
+    document.getElementById("btnSendTo1c").style.display = "";
+    document.getElementById("backLink").style.display = "none";
+  }
+
+  /* ── boot ── */
+  for (var i = 0; i < SESSION_PARAMS.length; i++) {
+    var p = SESSION_PARAMS[i];
+    if (params.indexOf(p) === -1) params.push(p);
+  }
+  initEditor();
+
+})();
+</script>
+</body>
+</html>

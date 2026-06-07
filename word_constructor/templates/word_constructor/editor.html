@@ -1,0 +1,1647 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ filename }} — Конструктор приказов</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --slot-bg: #e8f0f8;
+      --slot-border: #a8c4e0;
+      --slot-hover-bg: #cfe0f2;
+      --slot-drop-bg: #d4edda;
+      --slot-drop-border: #28a745;
+      --chip-bg: #f0f5fa;
+      --chip-hover-bg: #dce8f5;
+      --chip-hl-border: #1f4b7a;
+      --new-badge: #e8f5e9;
+      --new-badge-border: #4caf50;
+      --shadow: 0 10px 30px rgba(15,23,42,.06);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ---- Top bar ---- */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    .back-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .topbar-meta {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+
+    .topbar-filename {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .topbar-sep {
+      color: var(--line);
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .topbar-expires {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .btn-download {
+      padding: 8px 20px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 150ms;
+    }
+
+    .btn-download:hover:not(:disabled) { background: var(--accent-dark); }
+    .btn-download:disabled { opacity: .55; cursor: default; }
+    .btn-download.btn-done { background: #28a745; }
+
+    /* ---- Layout ---- */
+    .workspace {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ---- Document panel ---- */
+    .doc-panel {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 40px;
+      background: var(--bg);
+    }
+
+    .doc-paper {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 48px 56px;
+      max-width: 860px;
+      margin: 0 auto;
+      min-height: 600px;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .doc-paper p { margin: 0.4em 0; }
+    .doc-paper h1, .doc-paper h2, .doc-paper h3 { margin: 0.8em 0 0.4em; }
+
+    .doc-table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 0.6em 0;
+    }
+
+    .doc-table td {
+      border: 1px solid #b0bec5;
+      padding: 6px 10px;
+      vertical-align: top;
+    }
+
+    /* ---- Param slots (inside document) ---- */
+    .param-slot {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 5px;
+      background: var(--slot-bg);
+      border: 1px solid var(--slot-border);
+      color: var(--accent-dark);
+      font-weight: 600;
+      cursor: text;
+      position: relative;
+      transition: background 120ms, border-color 120ms;
+      min-width: 20px;
+      outline: none;
+      white-space: nowrap;
+    }
+
+    .param-slot:focus {
+      background: #fff;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(31,75,122,.15);
+      outline: none;
+    }
+
+    .param-slot:hover,
+    .param-slot.slot-hover {
+      background: var(--slot-hover-bg);
+      border-color: var(--accent);
+    }
+
+    .param-slot.slot-from-chip-hover {
+      background: #c5d9ee;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(31,75,122,.2);
+    }
+
+    .param-slot.drop-target {
+      background: var(--slot-drop-bg);
+      border-color: var(--slot-drop-border);
+      box-shadow: 0 0 0 2px rgba(40,167,69,.25);
+    }
+
+    /* Tooltip showing param key on hover */
+    .param-slot::before {
+      content: attr(data-key);
+      position: absolute;
+      bottom: calc(100% + 5px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a2e42;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: "Consolas", "Courier New", monospace;
+      padding: 3px 8px;
+      border-radius: 5px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms;
+      z-index: 100;
+    }
+
+    .param-slot:hover::before { opacity: 1; }
+
+    /* Empty slot — show key name as watermark */
+    .param-slot.slot-empty {
+      min-width: 80px;
+      border-style: dashed;
+      background: #f5f8fc;
+    }
+    .param-slot.slot-empty::after {
+      content: attr(data-key);
+      color: #b0c4d8;
+      font-style: italic;
+      font-weight: 400;
+      font-size: 11px;
+      pointer-events: none;
+    }
+
+    /* ---- Params panel ---- */
+    .params-panel {
+      width: 300px;
+      min-width: 180px;
+      max-width: 560px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-left: 1px solid var(--line);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Resize handle */
+    .panel-resizer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 5px;
+      cursor: col-resize;
+      z-index: 20;
+      background: transparent;
+      transition: background 150ms;
+    }
+    .panel-resizer:hover,
+    .panel-resizer.dragging { background: rgba(31,75,122,.18); }
+
+    .panel-header {
+      padding: 10px 12px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .panel-header-title { flex: 1; }
+
+    .panel-count {
+      font-size: 10px;
+      font-weight: 700;
+      background: #e8f0f8;
+      color: var(--accent);
+      border-radius: 10px;
+      padding: 1px 7px;
+      letter-spacing: 0;
+    }
+
+    .panel-sync-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #b0bec5;
+      transition: background 300ms;
+      flex-shrink: 0;
+    }
+
+    .panel-sync-dot.syncing { background: #f59e0b; }
+    .panel-sync-dot.updated { background: #22c55e; }
+
+    /* Collapse toggle */
+    .btn-panel-collapse {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+      transition: background 120ms;
+    }
+    .btn-panel-collapse:hover { background: var(--chip-hover-bg); color: var(--accent); }
+
+    /* Collapsed panel */
+    .params-panel.collapsed {
+      width: 36px !important;
+      min-width: 36px;
+    }
+    .params-panel.collapsed .panel-header {
+      padding: 10px 7px;
+      justify-content: center;
+    }
+    .params-panel.collapsed .panel-header-title,
+    .params-panel.collapsed .panel-count,
+    .params-panel.collapsed .panel-sync-dot,
+    .params-panel.collapsed .panel-search,
+    .params-panel.collapsed .params-list,
+    .params-panel.collapsed .panel-hint,
+    .params-panel.collapsed .panel-resizer { display: none; }
+
+    /* Search */
+    .panel-search {
+      padding: 8px 10px 6px;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .param-search-input {
+      width: 100%;
+      padding: 5px 8px 5px 28px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%235c6b7a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") 8px 50% / 13px no-repeat;
+      color: var(--text);
+      outline: none;
+      transition: border-color 150ms;
+      -webkit-appearance: none;
+    }
+    .param-search-input:focus { border-color: var(--accent); background-color: #fff; }
+    .param-search-input::placeholder { color: var(--muted); }
+
+    .params-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .params-empty-msg {
+      font-size: 12px;
+      color: var(--muted);
+      font-style: italic;
+      padding: 8px 4px;
+      text-align: center;
+    }
+
+    .param-chip {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--chip-bg);
+      user-select: none;
+      flex-shrink: 0;
+      transition: background 120ms, border-color 120ms, box-shadow 120ms;
+      overflow: hidden;
+    }
+
+    .chip-main {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 8px 7px 10px;
+      cursor: grab;
+    }
+
+    .chip-main:active { cursor: grabbing; }
+
+    .chip-main-text { flex: 1; min-width: 0; }
+
+    .param-chip:hover .chip-main,
+    .param-chip.chip-hover .chip-main {
+      background: var(--chip-hover-bg);
+    }
+
+    .param-chip.chip-from-slot-hover {
+      border-color: var(--chip-hl-border);
+      box-shadow: 0 0 0 2px rgba(31,75,122,.18);
+    }
+
+    .param-chip.chip-hidden { display: none; }
+
+    .param-chip.dragging { opacity: .5; }
+
+    .chip-key {
+      font-size: 10px;
+      font-family: "Consolas", "Courier New", monospace;
+      color: var(--muted);
+      margin-bottom: 1px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chip-value {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chip-new-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #2e7d32;
+      background: var(--new-badge);
+      border: 1px solid var(--new-badge-border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    /* fx button */
+    .btn-fx {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 120ms, border-color 120ms;
+      padding: 0;
+      line-height: 1;
+    }
+
+    .btn-fx:hover { background: var(--chip-hover-bg); border-color: var(--accent); }
+    .btn-fx.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    /* transform panel */
+    .chip-fx-panel {
+      display: none;
+      padding: 0 8px 8px;
+      border-top: 1px solid var(--line);
+      max-height: 320px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .chip-fx-panel.open { display: block; }
+
+    .chip-fx-panel::-webkit-scrollbar { width: 4px; }
+    .chip-fx-panel::-webkit-scrollbar-track { background: transparent; }
+    .chip-fx-panel::-webkit-scrollbar-thumb { background: #c5cfd8; border-radius: 2px; }
+
+    .fx-loading {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 6px 4px;
+    }
+
+    .fx-group-label {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 8px 0 4px;
+    }
+
+    .fx-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 5px 6px;
+      border-radius: 6px;
+      cursor: grab;
+      transition: background 100ms;
+      border: 1px solid transparent;
+    }
+
+    .fx-item:hover {
+      background: #e8f0f8;
+      border-color: var(--slot-border);
+    }
+
+    .fx-item:active { cursor: grabbing; }
+
+    .fx-item.info-only {
+      cursor: default;
+      opacity: .75;
+    }
+
+    .fx-item-icon {
+      font-size: 13px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .fx-item-body { min-width: 0; }
+
+    .fx-item-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 1px;
+    }
+
+    .fx-item-result {
+      font-size: 12px;
+      color: var(--text);
+      word-break: break-word;
+      line-height: 1.4;
+    }
+
+    .fx-empty {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 6px 4px;
+      font-style: italic;
+    }
+
+    /* Table param block in document preview */
+    .table-param-block {
+      margin: 0.5em 0;
+    }
+
+    .table-param .table-param thead th {
+      background: #e8f0f8;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .table-param-empty {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    /* Table-type slot badge (inline, non-editable) */
+    .param-slot.table-slot {
+      cursor: default;
+      background: #f0f4e8;
+      border-color: #a8c47a;
+      color: #3d5a1a;
+      font-size: 12px;
+    }
+
+    /* Table chip in params panel */
+    .param-chip.table-chip .chip-value { color: var(--muted); font-weight: 400; font-style: italic; }
+    .param-chip.table-chip { border-color: #a8c47a; background: #f5f9ee; }
+    .param-chip.table-chip:hover .chip-main { background: #eaf2de; }
+
+    /* Table expand button */
+    .btn-table-expand {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border: 1px solid #a8c47a;
+      border-radius: 5px;
+      background: #fff;
+      color: #3d5a1a;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+      transition: background 120ms, transform 200ms;
+    }
+    .btn-table-expand:hover { background: #eaf2de; }
+    .btn-table-expand.open { transform: rotate(180deg); }
+
+    /* Table preview body */
+    .chip-table-body {
+      border-top: 1px solid #c5d9a8;
+      overflow: auto;
+      max-height: 240px;
+    }
+    .chip-table-body::-webkit-scrollbar { width: 4px; height: 4px; }
+    .chip-table-body::-webkit-scrollbar-thumb { background: #b8cfa0; border-radius: 2px; }
+
+    /* Preview table */
+    .chip-preview-table {
+      border-collapse: collapse;
+      font-size: 11px;
+      min-width: 100%;
+      table-layout: auto;
+    }
+    .chip-preview-table th,
+    .chip-preview-table td {
+      border: 1px solid #d4e8be;
+      padding: 3px 7px;
+      white-space: nowrap;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* Corner cell */
+    .chip-preview-table .tbl-corner {
+      background: #d4e8be;
+      min-width: 22px;
+      width: 22px;
+      padding: 2px;
+      text-align: center;
+      font-size: 9px;
+      color: #5a7a3a;
+      position: sticky;
+      top: 0;
+      left: 0;
+      z-index: 2;
+    }
+    /* Column headers (row 0) — draggable */
+    .chip-preview-table .col-header {
+      background: #e3f0d2;
+      font-weight: 700;
+      color: #3d5a1a;
+      cursor: grab;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      user-select: none;
+    }
+    .chip-preview-table .col-header:hover { background: #cce0b0; }
+    .chip-preview-table .col-header:active { cursor: grabbing; }
+    /* Row drag handles */
+    .chip-preview-table .row-handle {
+      background: #eaf2de;
+      color: #7a9a5a;
+      cursor: grab;
+      text-align: center;
+      font-size: 10px;
+      padding: 2px 4px;
+      user-select: none;
+      position: sticky;
+      left: 0;
+      z-index: 1;
+    }
+    .chip-preview-table .row-handle:hover { background: #cce0b0; color: #3d5a1a; }
+    .chip-preview-table .row-handle:active { cursor: grabbing; }
+    /* Draggable data cells */
+    .chip-preview-table .cell-drag {
+      cursor: grab;
+    }
+    .chip-preview-table .cell-drag:hover { background: #dcefd4; }
+    .chip-preview-table .cell-drag:active { cursor: grabbing; }
+    .chip-preview-table .dragging-src { opacity: 0.35; }
+
+    .panel-hint {
+      padding: 8px 12px 10px;
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.5;
+      border-top: 1px solid var(--line);
+      flex-shrink: 0;
+    }
+
+    /* ---- Document body element wrappers (carry data-body-idx) ---- */
+    .doc-body-el { display: block; }
+
+    /* ---- Table drop zones (visible only during table chip drag) ---- */
+    .table-drop-zone {
+      height: 4px;
+      border-radius: 2px;
+      background: transparent;
+      margin: 1px 0;
+      transition: height 120ms, background 120ms;
+      cursor: copy;
+      position: relative;
+    }
+    .table-drop-zone.drag-over {
+      height: 32px;
+      background: #e8f5e9;
+      border: 2px dashed #4caf50;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .table-drop-zone.drag-over::before {
+      content: "↓ Вставить таблицу здесь";
+      font-size: 11px;
+      font-weight: 700;
+      color: #2e7d32;
+      pointer-events: none;
+    }
+
+    /* Injected table in document preview */
+    .injected-table-el {
+      border: 1px dashed #4caf50;
+      border-radius: 4px;
+      padding: 2px;
+      position: relative;
+    }
+    .injected-table-el::after {
+      content: "вставлено";
+      position: absolute;
+      top: 2px;
+      right: 6px;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #4caf50;
+      letter-spacing: .06em;
+    }
+    .injected-remove-btn {
+      display: block;
+      margin: 3px 0 1px;
+      font-size: 10px;
+      color: #b42318;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+    }
+    .injected-remove-btn:hover { color: #7a1510; }
+
+    /* Table chip — draggable chip-main */
+    .param-chip.table-chip .chip-main { cursor: grab; }
+    .param-chip.table-chip .chip-main:active { cursor: grabbing; }
+    .param-chip.table-chip.tbl-dragging { opacity: .5; }
+
+    /* ---- Scrollbar styling ---- */
+    .params-list::-webkit-scrollbar,
+    .doc-panel::-webkit-scrollbar { width: 6px; }
+    .params-list::-webkit-scrollbar-track,
+    .doc-panel::-webkit-scrollbar-track { background: transparent; }
+    .params-list::-webkit-scrollbar-thumb,
+    .doc-panel::-webkit-scrollbar-thumb {
+      background: #c5cfd8;
+      border-radius: 3px;
+    }
+
+    @media (max-width: 900px) {
+      .topbar-expires, .topbar-sep { display: none; }
+    }
+
+    @media (max-width: 700px) {
+      .workspace { flex-direction: column; }
+      .params-panel {
+        width: 100% !important;
+        min-width: unset;
+        max-width: unset;
+        height: 240px;
+        min-height: 160px;
+        max-height: 50vh;
+        border-left: none;
+        border-top: 1px solid var(--line);
+      }
+      .panel-resizer { display: none; }
+      .params-panel.collapsed {
+        width: 100% !important;
+        height: 36px;
+        min-height: 36px;
+      }
+      .params-panel.collapsed .panel-header {
+        padding: 10px 12px;
+        justify-content: space-between;
+      }
+      .params-panel.collapsed .panel-header-title,
+      .params-panel.collapsed .panel-count,
+      .params-panel.collapsed .panel-sync-dot { display: flex; }
+      .doc-panel { padding: 16px; }
+      .doc-paper { padding: 24px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="back-link" id="backLink" href="/">← Сервисы</a>
+  <span class="topbar-meta">
+    <span class="topbar-filename">{{ filename }}</span>
+    <span class="topbar-sep">|</span>
+    <span class="topbar-expires" id="expiresLabel">Действителен до: {{ expires_at[:19].replace("T", " ") }} UTC</span>
+  </span>
+  <button class="btn-download" id="downloadBtn">Скачать документ</button>
+</div>
+
+<div class="workspace">
+
+  <!-- Document preview -->
+  <div class="doc-panel">
+    <div class="doc-paper" id="docPaper">
+      {{ doc_html | safe }}
+    </div>
+  </div>
+
+  <!-- Params panel -->
+  <div class="params-panel" id="paramsPanel">
+    <div class="panel-resizer" id="panelResizer"></div>
+    <div class="panel-header">
+      <span class="panel-header-title">Параметры</span>
+      <span class="panel-count" id="paramCount">{{ params | length }}</span>
+      <span class="panel-sync-dot" id="syncDot" title="Синхронизация с 1С"></span>
+      <button class="btn-panel-collapse" id="btnCollapse" title="Свернуть панель">‹</button>
+    </div>
+    <div class="panel-search">
+      <input type="search" id="paramSearch" class="param-search-input"
+             placeholder="Поиск по имени параметра…" autocomplete="off">
+    </div>
+    <div class="params-list" id="paramsList">
+      {% for key, value in params.items() %}
+      <div class="param-chip"
+           data-key="{{ key | e }}"
+           data-value="{{ value | e }}">
+        <div class="chip-main" draggable="true">
+          <div class="chip-main-text">
+            <div class="chip-key">{{ key }}</div>
+            <div class="chip-value">{{ value if value else '—' }}</div>
+          </div>
+          <button class="btn-fx" title="Функции (fx)" tabindex="-1">fx</button>
+        </div>
+        <div class="chip-fx-panel"></div>
+      </div>
+      {% endfor %}
+      {% for key, rows in table_params.items() %}
+      <div class="param-chip table-chip"
+           data-key="{{ key | e }}"
+           data-type="table">
+        <div class="chip-main" draggable="true" title="Перетащить таблицу в документ">
+          <div class="chip-main-text">
+            <div class="chip-key">{{ key }}</div>
+            <div class="chip-value">📋 {{ rows | length }} стр. × {{ rows[0] | length if rows else 0 }} кол.</div>
+          </div>
+          <button class="btn-table-expand" title="Показать / скрыть данные">▾</button>
+        </div>
+        <div class="chip-table-body" style="display:none"></div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="panel-hint">
+      Перетащите параметр на поле · Кликните на поле для редактирования · Наведите — увидите имя
+    </div>
+  </div>
+
+</div>
+
+<script>
+const SESSION_ID   = {{ session_id | tojson }};
+const FILENAME     = {{ filename | tojson }};
+
+if (new URLSearchParams(location.search).get('source') === 'from1c') {
+  document.getElementById('downloadBtn').style.display = 'none';
+  var backLink = document.getElementById('backLink');
+  backLink.removeAttribute('href');
+  backLink.style.cursor = 'default';
+  backLink.textContent = 'KazUni Конструктор Приказов';
+}
+
+let paramsVersion  = {{ params_version }};
+let currentParams  = {{ params | tojson }};
+let tableParams    = {{ table_params | tojson }};
+
+const initialKeys = new Set(Object.keys(currentParams));
+
+// ── drag state (shared between chip drags and fx-item drags) ──────────────
+let draggedValue = null;
+
+// ── helpers ───────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setDragValue(v) { draggedValue = v; }
+
+// ── XHR helper (works in all browsers including 1C WebBrowser/IE) ─────────
+function _xhr(method, url, body, onDone) {
+  var req = new XMLHttpRequest();
+  req.open(method, url, true);
+  if (body !== null) req.setRequestHeader('Content-Type', 'application/json');
+  req.onload  = function() { onDone(req.status >= 200 && req.status < 300, req); };
+  req.onerror = function() { onDone(false, req); };
+  req.send(body !== null ? JSON.stringify(body) : null);
+}
+
+// ── auto-save ─────────────────────────────────────────────────────────────
+let _saveTimer = null;
+let _saveIndicator = null;
+
+function _getSaveIndicator() {
+  if (!_saveIndicator) {
+    _saveIndicator = document.createElement('span');
+    _saveIndicator.id = 'saveIndicator';
+    _saveIndicator.style.cssText = 'font-size:11px;color:#5c6b7a;white-space:nowrap;transition:opacity 400ms';
+    var topbar = document.querySelector('.topbar');
+    var btn = document.getElementById('downloadBtn');
+    topbar.insertBefore(_saveIndicator, btn);
+  }
+  return _saveIndicator;
+}
+
+function scheduleSave() {
+  clearTimeout(_saveTimer);
+  var ind = _getSaveIndicator();
+  ind.textContent = '…';
+  ind.style.color = '#5c6b7a';
+  ind.style.opacity = '1';
+  _saveTimer = setTimeout(saveSlots, 800);
+}
+
+function saveSlots(onComplete) {
+  var values = {};
+  document.querySelectorAll('.param-slot:not(.table-slot)').forEach(function(slot) {
+    var key = slot.dataset.originalKey || slot.dataset.key;
+    values[key] = (slot.innerText || slot.textContent).replace(/\n/g, '').trim();
+  });
+  var ind = _getSaveIndicator();
+  _xhr('POST', '/services/word-constructor/api/sessions/' + SESSION_ID + '/slots', values, function(ok) {
+    ind.textContent = ok ? 'Сохранено' : 'Ошибка сохранения';
+    ind.style.color  = ok ? '#22c55e'  : '#ef4444';
+    ind.style.opacity = '1';
+    setTimeout(function() { ind.style.opacity = '0'; ind.style.color = '#5c6b7a'; }, 2000);
+    if (onComplete) onComplete(ok);
+  });
+}
+
+// ── slot placeholder (watermark when empty) ───────────────────────────────
+function updateSlotPlaceholder(slot) {
+  var isEmpty = !(slot.innerText || slot.textContent).trim();
+  slot.classList.toggle('slot-empty', isEmpty);
+}
+
+// ── auto-fill slots from params ───────────────────────────────────────────
+// Fills only empty slots; never overwrites user-entered text.
+function prefillSlots(paramsMap) {
+  var filled = 0;
+  document.querySelectorAll('.param-slot:not(.table-slot)').forEach(function(slot) {
+    var key = slot.dataset.originalKey || slot.dataset.key;
+    var isEmpty = !(slot.innerText || slot.textContent).trim();
+    if (isEmpty && paramsMap[key]) {
+      slot.textContent = paramsMap[key];
+      updateSlotPlaceholder(slot);
+      filled++;
+    } else {
+      updateSlotPlaceholder(slot);
+    }
+  });
+  if (filled > 0) scheduleSave();
+}
+
+// ── wire a param slot ─────────────────────────────────────────────────────
+function wireSlot(slot) {
+  slot.addEventListener('mouseenter', () => {
+    slot.classList.add('slot-hover');
+    highlightChipByKey(slot.dataset.key, true);
+  });
+  slot.addEventListener('mouseleave', () => {
+    slot.classList.remove('slot-hover');
+    highlightChipByKey(slot.dataset.key, false);
+  });
+  slot.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); slot.blur(); }
+    if (e.key === 'Escape') { slot.blur(); }
+  });
+  // 'input' covers most browsers; 'keyup' is a fallback for edge cases
+  slot.addEventListener('input', function() { updateSlotPlaceholder(slot); scheduleSave(); });
+  slot.addEventListener('keyup',  function() { updateSlotPlaceholder(slot); });
+  slot.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    // Insert plain text at cursor
+    const sel = window.getSelection();
+    if (sel.rangeCount) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(text));
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      slot.textContent += text;
+    }
+    updateSlotPlaceholder(slot);
+    scheduleSave();
+  });
+  slot.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    slot.classList.add('drop-target');
+  });
+  slot.addEventListener('dragleave', () => slot.classList.remove('drop-target'));
+  slot.addEventListener('drop', e => {
+    e.preventDefault();
+    slot.classList.remove('drop-target');
+    if (draggedValue !== null) {
+      slot.textContent = draggedValue;
+      updateSlotPlaceholder(slot);
+      scheduleSave();
+    }
+  });
+}
+
+// ── wire a param chip (the main draggable row) ────────────────────────────
+function wireChip(chip) {
+  const main  = chip.querySelector('.chip-main');
+  const btnFx = chip.querySelector('.btn-fx');
+  const panel = chip.querySelector('.chip-fx-panel');
+
+  // Main row drag — drags the raw param value
+  main.addEventListener('dragstart', e => {
+    setDragValue(chip.dataset.value);
+    e.dataTransfer.effectAllowed = 'copy';
+    chip.classList.add('dragging');
+  });
+  main.addEventListener('dragend', () => {
+    chip.classList.remove('dragging');
+    setDragValue(null);
+  });
+
+  // Hover highlight
+  chip.addEventListener('mouseenter', () => {
+    chip.classList.add('chip-hover');
+    highlightSlotsByKey(chip.dataset.key, true);
+  });
+  chip.addEventListener('mouseleave', () => {
+    chip.classList.remove('chip-hover');
+    highlightSlotsByKey(chip.dataset.key, false);
+  });
+
+  // fx button — toggle transform panel
+  if (btnFx && panel) {
+    btnFx.addEventListener('click', e => {
+      e.stopPropagation();
+      const open = panel.classList.toggle('open');
+      btnFx.classList.toggle('active', open);
+      if (open && panel.childElementCount === 0) {
+        loadFxPanel(chip, panel);
+      }
+    });
+  }
+}
+
+// ── transform cache: prefetched on load ──────────────────────────────────
+var _fxCache = {}; // value → transforms[]
+
+function _xhrGetJSON(url, callback) {
+  _xhr('GET', url, null, function(ok, req) {
+    if (ok) {
+      try { callback(JSON.parse(req.responseText)); return; } catch(e) {}
+    }
+    callback(null);
+  });
+}
+
+function prefetchAllTransforms() {
+  document.querySelectorAll('.param-chip').forEach(function(chip) {
+    var value = chip.dataset.value;
+    if (!value || _fxCache.hasOwnProperty(value)) return;
+    _fxCache[value] = []; // mark as in-flight
+    _xhrGetJSON(
+      '/services/word-constructor/api/transforms?value=' + encodeURIComponent(value),
+      function(data) { _fxCache[value] = data || []; }
+    );
+  });
+}
+
+// ── load transform panel (instant from cache, or fetch on demand) ─────────
+function loadFxPanel(chip, panel) {
+  var value = chip.dataset.value;
+  if (_fxCache.hasOwnProperty(value) && _fxCache[value].length) {
+    renderFxPanel(panel, _fxCache[value]);
+    return;
+  }
+  panel.innerHTML = '<div class="fx-loading">Загрузка…</div>';
+  _xhrGetJSON(
+    '/services/word-constructor/api/transforms?value=' + encodeURIComponent(value),
+    function(data) {
+      var transforms = data || [];
+      _fxCache[value] = transforms;
+      renderFxPanel(panel, transforms);
+    }
+  );
+}
+
+function renderFxPanel(panel, transforms) {
+  if (!transforms.length) {
+    panel.innerHTML = '<div class="fx-empty">Нет доступных функций</div>';
+    return;
+  }
+
+  // Group by group label
+  const groups = {};
+  for (const t of transforms) {
+    if (!groups[t.group]) groups[t.group] = [];
+    groups[t.group].push(t);
+  }
+
+  let html = '';
+  for (const [groupName, items] of Object.entries(groups)) {
+    html += `<div class="fx-group-label">${escHtml(groupName)}</div>`;
+    for (const t of items) {
+      if (t.info_only) {
+        html += `
+          <div class="fx-item info-only" data-value="${escHtml(t.result)}">
+            <div class="fx-item-icon">ℹ️</div>
+            <div class="fx-item-body">
+              <div class="fx-item-label">${escHtml(t.label)}</div>
+            </div>
+          </div>`;
+      } else {
+        html += `
+          <div class="fx-item" draggable="true" data-value="${escHtml(t.result)}">
+            <div class="fx-item-icon">⚡</div>
+            <div class="fx-item-body">
+              <div class="fx-item-label">${escHtml(t.label)}</div>
+              <div class="fx-item-result">${escHtml(t.result)}</div>
+            </div>
+          </div>`;
+      }
+    }
+  }
+  panel.innerHTML = html;
+
+  // Wire draggable fx items
+  panel.querySelectorAll('.fx-item[draggable="true"]').forEach(item => {
+    item.addEventListener('dragstart', e => {
+      setDragValue(item.dataset.value);
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+    item.addEventListener('dragend', () => setDragValue(null));
+  });
+}
+
+// ── cross-highlight helpers ───────────────────────────────────────────────
+function highlightSlotsByKey(key, on) {
+  document.querySelectorAll('.param-slot').forEach(s => {
+    if (s.dataset.key === key) s.classList.toggle('slot-from-chip-hover', on);
+  });
+}
+
+function highlightChipByKey(key, on) {
+  document.querySelectorAll('.param-chip').forEach(c => {
+    if (c.dataset.key === key) c.classList.toggle('chip-from-slot-hover', on);
+  });
+}
+
+// ── full-table drag-to-document ───────────────────────────────────────────
+var injectedTables = [];  // [{body_idx: N, key: K}]
+var _tableDragKey  = null;
+
+function buildDocTablePreview(key, rows) {
+  if (!rows || !rows.length) return '<p style="padding:4px;color:var(--muted);font-size:12px">Таблица пуста</p>';
+  var header = rows[0];
+  var cols = header.length;
+  var th = header.map(function(c) { return '<th>' + escHtml(String(c)) + '</th>'; }).join('');
+  var tbody = '';
+  for (var r = 1; r < rows.length; r++) {
+    var tds = '';
+    for (var c = 0; c < cols; c++) {
+      tds += '<td>' + escHtml(String((rows[r] && rows[r][c] != null) ? rows[r][c] : '')) + '</td>';
+    }
+    tbody += '<tr>' + tds + '</tr>';
+  }
+  return '<table class="doc-table"><thead><tr>' + th + '</tr></thead><tbody>' + tbody + '</tbody></table>';
+}
+
+function showTableDropZones(tableKey) {
+  var paper = document.getElementById('docPaper');
+  var els = Array.from(paper.querySelectorAll('.doc-body-el'));
+  els.forEach(function(el) {
+    var zone = document.createElement('div');
+    zone.className = 'table-drop-zone';
+    zone.dataset.afterBodyIdx = el.dataset.bodyIdx;
+    zone.dataset.tableKey = tableKey;
+    el.parentNode.insertBefore(zone, el.nextSibling);
+
+    zone.addEventListener('dragenter', function(e) { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragover',  function(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', function()  { zone.classList.remove('drag-over'); });
+    zone.addEventListener('drop', function(e) {
+      e.preventDefault();
+      zone.classList.remove('drag-over');
+      var key = zone.dataset.tableKey;
+      var bodyIdx = parseInt(zone.dataset.afterBodyIdx, 10);
+      insertDocTable(key, bodyIdx, zone);
+      hideTableDropZones();
+    });
+  });
+}
+
+function hideTableDropZones() {
+  document.getElementById('docPaper').querySelectorAll('.table-drop-zone').forEach(function(z) { z.remove(); });
+}
+
+function insertDocTable(key, bodyIdx, afterZone) {
+  var rows = tableParams[key] || [];
+  var wrapper = document.createElement('div');
+  wrapper.className = 'doc-body-el injected-table-el';
+  wrapper.dataset.bodyIdx = bodyIdx;
+  wrapper.dataset.injectedKey = key;
+
+  var removeBtn = document.createElement('button');
+  removeBtn.className = 'injected-remove-btn';
+  removeBtn.textContent = '✕ Убрать таблицу';
+  removeBtn.addEventListener('click', function() {
+    wrapper.remove();
+    injectedTables = injectedTables.filter(function(i) {
+      return !(i.body_idx === bodyIdx && i.key === key);
+    });
+    saveInjectedTables();
+  });
+
+  wrapper.innerHTML = buildDocTablePreview(key, rows);
+  wrapper.appendChild(removeBtn);
+  afterZone.parentNode.insertBefore(wrapper, afterZone);
+
+  // Avoid duplicates (same table at same position)
+  injectedTables = injectedTables.filter(function(i) {
+    return !(i.body_idx === bodyIdx && i.key === key);
+  });
+  injectedTables.push({body_idx: bodyIdx, key: key});
+  saveInjectedTables();
+}
+
+function saveInjectedTables() {
+  _xhr('POST', '/services/word-constructor/api/sessions/' + SESSION_ID + '/inject',
+    {injected_tables: injectedTables}, function() {});
+}
+
+// ── table preview in params panel ────────────────────────────────────────
+function buildTablePreview(key, rows) {
+  if (!rows || !rows.length) {
+    return '<p style="padding:8px 10px;color:var(--muted);font-size:11px">Таблица пуста</p>';
+  }
+  var header = rows[0];
+  var cols = header.length;
+  var html = '<table class="chip-preview-table"><thead><tr>';
+  html += '<th class="tbl-corner" title="↕ строка  ↔ столбец">⟺</th>';
+  for (var c = 0; c < cols; c++) {
+    var colTitle = escHtml(String(header[c] || ''));
+    // drag value: comma-joined values of this column (all rows including header)
+    html += '<th class="col-header" draggable="true"'
+          + ' data-tbl="' + escHtml(key) + '" data-col="' + c + '"'
+          + ' title="Перетащить столбец «' + colTitle + '»">' + colTitle + '</th>';
+  }
+  html += '</tr></thead><tbody>';
+  for (var r = 1; r < rows.length; r++) {
+    html += '<tr>';
+    html += '<td class="row-handle" draggable="true"'
+          + ' data-tbl="' + escHtml(key) + '" data-row="' + r + '"'
+          + ' title="Перетащить строку ' + r + '">▶</td>';
+    for (var ci = 0; ci < cols; ci++) {
+      var cell = (rows[r] && rows[r][ci] != null) ? String(rows[r][ci]) : '';
+      html += '<td class="cell-drag" draggable="true"'
+            + ' data-tbl="' + escHtml(key) + '" data-row="' + r + '" data-col="' + ci + '"'
+            + ' title="' + escHtml(cell) + '">' + escHtml(cell) + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+function wireTablePreviewDrags(container, key) {
+  var rows = tableParams[key] || [];
+
+  // Cell drags → cell value
+  container.querySelectorAll('.cell-drag').forEach(function(td) {
+    td.addEventListener('dragstart', function(e) {
+      var val = (td.innerText || td.textContent).trim();
+      setDragValue(val);
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('text/plain', val);
+      td.classList.add('dragging-src');
+    });
+    td.addEventListener('dragend', function() {
+      td.classList.remove('dragging-src');
+      setDragValue(null);
+    });
+  });
+
+  // Row drags → comma-joined row values
+  container.querySelectorAll('.row-handle').forEach(function(td) {
+    td.addEventListener('dragstart', function(e) {
+      var r = parseInt(td.dataset.row, 10);
+      var row = (rows[r] || []).map(function(c) { return String(c); });
+      var val = row.join(', ');
+      setDragValue(val);
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('text/plain', val);
+      td.classList.add('dragging-src');
+    });
+    td.addEventListener('dragend', function() {
+      td.classList.remove('dragging-src');
+      setDragValue(null);
+    });
+  });
+
+  // Column header drags → comma-joined column values (skip header row)
+  container.querySelectorAll('.col-header').forEach(function(th) {
+    th.addEventListener('dragstart', function(e) {
+      var c = parseInt(th.dataset.col, 10);
+      var vals = [];
+      for (var r = 1; r < rows.length; r++) {
+        if (rows[r] && rows[r][c] != null) vals.push(String(rows[r][c]));
+      }
+      var val = vals.join(', ');
+      setDragValue(val);
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('text/plain', val);
+      th.classList.add('dragging-src');
+    });
+    th.addEventListener('dragend', function() {
+      th.classList.remove('dragging-src');
+      setDragValue(null);
+    });
+  });
+}
+
+function initTableChips() {
+  document.querySelectorAll('.param-chip.table-chip').forEach(function(chip) {
+    var key  = chip.dataset.key;
+    var main = chip.querySelector('.chip-main');
+    var btn  = chip.querySelector('.btn-table-expand');
+    var body = chip.querySelector('.chip-table-body');
+
+    // Hover highlight (same as regular chips)
+    chip.addEventListener('mouseenter', function() { highlightSlotsByKey(key, true); });
+    chip.addEventListener('mouseleave', function() { highlightSlotsByKey(key, false); });
+
+    // Drag entire table into document
+    if (main) {
+      main.addEventListener('dragstart', function(e) {
+        _tableDragKey = key;
+        e.dataTransfer.effectAllowed = 'copy';
+        chip.classList.add('tbl-dragging');
+        // Use setTimeout so drop zones appear after drag ghost is captured
+        setTimeout(function() { showTableDropZones(key); }, 0);
+      });
+      main.addEventListener('dragend', function() {
+        chip.classList.remove('tbl-dragging');
+        _tableDragKey = null;
+        hideTableDropZones();
+      });
+    }
+
+    if (!btn || !body) return;
+
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var isOpen = body.style.display !== 'none';
+      if (isOpen) {
+        body.style.display = 'none';
+        btn.classList.remove('open');
+      } else {
+        if (!body.innerHTML) {
+          body.innerHTML = buildTablePreview(key, tableParams[key] || []);
+          wireTablePreviewDrags(body, key);
+        }
+        body.style.display = '';
+        btn.classList.add('open');
+      }
+    });
+  });
+}
+
+// ── init all chips and slots on page load ─────────────────────────────────
+function initChips() {
+  document.querySelectorAll('.param-chip:not(.table-chip)').forEach(wireChip);
+  initTableChips();
+}
+
+function initSlots() {
+  document.querySelectorAll('.param-slot').forEach(wireSlot);
+}
+
+// ── build chip element (for polling-added params) ─────────────────────────
+function renderParamChip(key, value, isNew) {
+  const div = document.createElement('div');
+  div.className = 'param-chip';
+  div.dataset.key   = key;
+  div.dataset.value = value;
+  const badge = isNew ? `<span class="chip-new-badge">новый</span>` : '';
+  div.innerHTML = `
+    <div class="chip-main" draggable="true">
+      <div class="chip-main-text">
+        <div class="chip-key">${escHtml(key)}${badge}</div>
+        <div class="chip-value">${escHtml(value) || '—'}</div>
+      </div>
+      <button class="btn-fx" title="Функции (fx)" tabindex="-1">fx</button>
+    </div>
+    <div class="chip-fx-panel"></div>
+  `;
+  wireChip(div);
+  return div;
+}
+
+function applyParamUpdate(newParams, newVersion) {
+  const list = document.getElementById('paramsList');
+  let changed = false;
+
+  for (const [key, value] of Object.entries(newParams)) {
+    const existing = [...list.querySelectorAll('.param-chip')].find(c => c.dataset.key === key);
+    if (existing) {
+      // Update value if changed
+      if (existing.dataset.value !== value) {
+        existing.dataset.value = value;
+        existing.querySelector('.chip-value').textContent = value;
+        changed = true;
+      }
+    } else {
+      // Brand new param
+      const isNew = !initialKeys.has(key);
+      list.appendChild(renderParamChip(key, value, isNew));
+      changed = true;
+    }
+  }
+
+  // Auto-fill empty document slots for any updated/new param values
+  document.querySelectorAll('.param-slot:not(.table-slot)').forEach(function(slot) {
+    var key = slot.dataset.originalKey || slot.dataset.key;
+    var val = newParams[key];
+    if (val && !(slot.innerText || slot.textContent).trim()) {
+      slot.textContent = val;
+      updateSlotPlaceholder(slot);
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    flashSyncDot('updated');
+    updateParamCount();
+    filterChips(searchInput.value); // re-apply search after update
+    scheduleSave();
+  }
+
+  paramsVersion = newVersion;
+  currentParams = newParams;
+}
+
+function flashSyncDot(state) {
+  const dot = document.getElementById('syncDot');
+  dot.className = `panel-sync-dot ${state}`;
+  setTimeout(() => { dot.className = 'panel-sync-dot'; }, 2000);
+}
+
+// ---- Polling for param updates from 1C ----
+function pollParams() {
+  var dot = document.getElementById('syncDot');
+  dot.classList.add('syncing');
+  _xhr('GET', '/services/word-constructor/api/sessions/' + SESSION_ID + '/params', null, function(ok, req) {
+    dot.classList.remove('syncing');
+    if (!ok) {
+      if (req.status === 410 || req.status === 404) {
+        clearInterval(pollTimer);
+        var btn = document.getElementById('downloadBtn');
+        btn.disabled = true;
+        btn.textContent = 'Сессия истекла';
+      } else {
+        dot.className = 'panel-sync-dot';
+      }
+      return;
+    }
+    try {
+      var data = JSON.parse(req.responseText);
+      if (data.params_version > paramsVersion) {
+        applyParamUpdate(data.params, data.params_version);
+      } else {
+        dot.className = 'panel-sync-dot';
+      }
+    } catch(_) {
+      dot.className = 'panel-sync-dot';
+    }
+  });
+}
+
+// Poll every 4 seconds
+const pollTimer = setInterval(pollParams, 4000);
+
+// ---- Download ----
+document.getElementById('downloadBtn').addEventListener('click', function() {
+  var btn = document.getElementById('downloadBtn');
+  btn.disabled = true;
+  btn.textContent = 'Генерация...';
+
+  // Flush pending save first, then download
+  clearTimeout(_saveTimer);
+  saveSlots(function() {
+    var req = new XMLHttpRequest();
+    req.open('GET', '/services/word-constructor/api/download/' + SESSION_ID, true);
+    req.responseType = 'blob';
+    req.onload = function() {
+      if (req.status >= 200 && req.status < 300) {
+        var url = URL.createObjectURL(req.response);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = FILENAME;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        clearInterval(pollTimer);
+        btn.textContent = '✓ Скачано';
+        btn.classList.add('btn-done');
+
+        document.querySelectorAll('.param-slot').forEach(function(s) {
+          s.contentEditable = 'false';
+          s.style.pointerEvents = 'none';
+          s.style.cursor = 'default';
+          s.style.background = '#e9ecef';
+        });
+        document.querySelectorAll('.param-chip').forEach(function(c) {
+          c.draggable = false;
+          c.style.cursor = 'default';
+        });
+      } else {
+        alert('Ошибка генерации документа (статус ' + req.status + ')');
+        btn.disabled = false;
+        btn.textContent = 'Скачать документ';
+      }
+    };
+    req.onerror = function() {
+      alert('Ошибка соединения при скачивании');
+      btn.disabled = false;
+      btn.textContent = 'Скачать документ';
+    };
+    req.send();
+  });
+});
+
+// ---- Panel collapse ----
+const collapseBtn = document.getElementById('btnCollapse');
+const paramsPanel = document.getElementById('paramsPanel');
+let panelCollapsed = false;
+
+collapseBtn.addEventListener('click', () => {
+  panelCollapsed = !panelCollapsed;
+  paramsPanel.classList.toggle('collapsed', panelCollapsed);
+  collapseBtn.textContent = panelCollapsed ? '›' : '‹';
+  collapseBtn.title = panelCollapsed ? 'Развернуть панель' : 'Свернуть панель';
+});
+
+// ---- Panel resize ----
+const resizer = document.getElementById('panelResizer');
+let isResizing = false;
+let resizeStartX = 0;
+let resizeStartW = 0;
+
+resizer.addEventListener('mousedown', e => {
+  if (panelCollapsed) return;
+  isResizing = true;
+  resizeStartX = e.clientX;
+  resizeStartW = paramsPanel.offsetWidth;
+  resizer.classList.add('dragging');
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+});
+
+document.addEventListener('mousemove', e => {
+  if (!isResizing) return;
+  const delta = resizeStartX - e.clientX; // dragging left increases width
+  const newW = Math.max(180, Math.min(560, resizeStartW + delta));
+  paramsPanel.style.width = newW + 'px';
+});
+
+document.addEventListener('mouseup', () => {
+  if (!isResizing) return;
+  isResizing = false;
+  resizer.classList.remove('dragging');
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+});
+
+// ---- Search filter ----
+const searchInput = document.getElementById('paramSearch');
+
+function filterChips(query) {
+  const q = query.trim().toLowerCase();
+  const list = document.getElementById('paramsList');
+  let visible = 0;
+  list.querySelectorAll('.param-chip').forEach(chip => {
+    const key = (chip.dataset.key || '').toLowerCase();
+    const val = (chip.dataset.value || '').toLowerCase();
+    const match = !q || key.includes(q) || val.includes(q);
+    chip.classList.toggle('chip-hidden', !match);
+    if (match) visible++;
+  });
+  // Show/hide empty message
+  let emptyMsg = list.querySelector('.params-empty-msg');
+  if (!visible && q) {
+    if (!emptyMsg) {
+      emptyMsg = document.createElement('div');
+      emptyMsg.className = 'params-empty-msg';
+      list.appendChild(emptyMsg);
+    }
+    emptyMsg.textContent = `Не найдено: «${query.trim()}»`;
+  } else if (emptyMsg) {
+    emptyMsg.remove();
+  }
+}
+
+searchInput.addEventListener('input', () => filterChips(searchInput.value));
+
+// Clear search on Escape
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { searchInput.value = ''; filterChips(''); }
+});
+
+// ---- Param count badge ----
+function updateParamCount() {
+  const count = document.querySelectorAll('.param-chip').length;
+  document.getElementById('paramCount').textContent = count;
+}
+
+// ---- Boot ----
+initChips();
+initSlots();
+prefillSlots(currentParams); // fill empty slots from params, mark others with watermark
+updateParamCount();
+prefetchAllTransforms(); // pre-warm cache so fx panels open instantly
+</script>
+</body>
+</html>

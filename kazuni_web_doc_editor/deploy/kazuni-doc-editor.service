@@ -1,0 +1,24 @@
+[Unit]
+Description=Gunicorn service for kazuni-doc-editor.birqadam.kz
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/kazuni_doc_editor
+Environment=PYTHONUNBUFFERED=1
+Environment=ONLYOFFICE_JWT_SECRET=kazuni-onlyoffice-secret
+Environment=ONLYOFFICE_INTERNAL_BASE_URL=http://host.docker.internal:8016
+ExecStart=/usr/bin/python3 -m gunicorn \
+    --workers 2 \
+    --threads 4 \
+    --bind 172.17.0.1:8016 \
+    --access-logfile - \
+    --error-logfile - \
+    app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KazUni Google Docs Test</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --surface: #ffffff;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --shadow: 0 10px 30px rgba(15,23,42,.06);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #e9eff5 0%, var(--bg) 180px);
+    }
+
+    .shell {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+    }
+
+    .back-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .card {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 26px 28px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 10px 18px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      color: var(--text);
+      background: #fff;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: var(--accent-dark); }
+
+    .meta {
+      margin-top: 20px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #f7fafc;
+      border: 1px solid var(--line);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    code {
+      font-family: "Consolas", "Courier New", monospace;
+      background: #eef2f6;
+      padding: 1px 5px;
+      border-radius: 4px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="/services/word-constructor">← Назад</a>
+
+    <div class="card">
+      <h1>KazUni Google Docs Test</h1>
+      <p>Это минимальная тестовая страница. Она не интегрирует Google Docs в шаблонизатор, а просто открывает новый документ Google Docs как верхнеуровневую страницу, чтобы проверить, способен ли встроенный браузер 1С отрисовать редактор Google Docs.</p>
+      <p>Если Google Docs откроется и будет работать в 1С, можно будет строить следующую интеграцию вокруг него. Если страница зависнет или останется пустой, значит встроенный движок 1С для этого сценария не подходит.</p>
+
+      <div class="btn-row">
+        <a class="btn btn-primary" id="openBtn" href="{{ google_docs_url }}">Открыть Google Docs</a>
+        <a class="btn" href="{{ google_docs_url }}" target="_blank" rel="noopener">Открыть в новой вкладке</a>
+      </div>
+
+      <div class="meta">
+        <div>Google Docs URL: <code>{{ google_docs_url }}</code></div>
+        <div>Google OAuth Client ID найден в проекте: <code>{{ google_client_id or "not found" }}</code></div>
+        <div>Для этого теста OAuth не используется. Если Google Docs попросит логин, это ожидаемо.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      if (params.get("autostart") === "1") {
+        window.location.href = {{ google_docs_url | tojson }};
+      }
+    })();
+  </script>
+</body>
+</html>

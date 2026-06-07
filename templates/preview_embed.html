@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Embedded Editor</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #fff;
+      font-family: "Segoe UI", sans-serif;
+      color: #203047;
+    }
+
+    .shell {
+      height: 100%;
+      width: 100%;
+    }
+
+    #content {
+      width: 100%;
+      height: 100%;
+    }
+
+    .frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      height: 100%;
+      text-align: center;
+      padding: 24px;
+      color: #607087;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div id="content" class="empty">
+      Загрузка документа...
+    </div>
+  </div>
+
+  <script>
+    const contentNode = document.getElementById('content');
+
+    function setStatus() {}
+
+    function renderEditor(url) {
+      contentNode.className = '';
+      contentNode.innerHTML = `<iframe class="frame" src="${url}" title="Embedded editor"></iframe>`;
+    }
+
+    async function uploadForEditor(payload) {
+      setStatus('Uploading document...');
+      const response = await fetch('/api/embedded-editor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+
+      renderEditor(`${result.edit_url}&ts=${Date.now()}`);
+      window.parent.postMessage(
+        { type: 'kazuni-preview-ready', document_id: result.document_id, edit_url: result.edit_url },
+        '*'
+      );
+    }
+
+    window.addEventListener('message', async (event) => {
+      const data = event.data || {};
+      if (data.type !== 'kazuni-preview-load') {
+        return;
+      }
+
+      try {
+        await uploadForEditor({
+          filename: data.filename || 'document.docx',
+          content_base64: data.content_base64 || data.base64 || '',
+        });
+      } catch (error) {
+        contentNode.className = 'empty';
+        contentNode.textContent = error.message;
+        window.parent.postMessage({ type: 'kazuni-preview-error', error: error.message }, '*');
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KazUni Word Editor</title>
+<style>
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #fff;
+}
+
+body {
+  font-family: "Segoe UI", sans-serif;
+}
+
+#editor-frame {
+  display: block;
+  width: 100%;
+  height: 100vh;
+  border: 0;
+  background: #fff;
+}
+
+#state {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #fff;
+  color: #4f5f75;
+  text-align: center;
+  line-height: 1.5;
+}
+
+#state.error {
+  color: #b42318;
+}
+</style>
+</head>
+<body>
+
+<iframe
+  id="editor-frame"
+  src="about:blank"
+  title="KazUni Editor"
+  loading="eager"
+  referrerpolicy="strict-origin-when-cross-origin"></iframe>
+
+<div id="state">Загрузка редактора...</div>
+
+<textarea id="docx-base64" style="display:none;">__BASE64_DOCX__</textarea>
+<input type="hidden" id="docx-filename" value="__FILENAME__">
+
+<script>
+(function () {
+  "use strict";
+
+  var editorFrame = document.getElementById("editor-frame");
+  var stateNode = document.getElementById("state");
+
+  function setState(text, isError) {
+    stateNode.textContent = text;
+    stateNode.className = isError ? "error" : "";
+    stateNode.style.display = "flex";
+  }
+
+  function hideState() {
+    stateNode.style.display = "none";
+  }
+
+  function getBase64Param() {
+    var node = document.getElementById("docx-base64");
+    if (!node) return "";
+    return (node.value || node.textContent || "").trim();
+  }
+
+  function getFilename() {
+    var node = document.getElementById("docx-filename");
+    return (node && node.value) ? node.value : "document.docx";
+  }
+
+  async function openEmbeddedEditor() {
+    var base64 = getBase64Param();
+
+    if (!base64) {
+      setState("Нет данных DOCX", true);
+      return;
+    }
+
+    setState("Подготовка документа...", false);
+
+    var response = await fetch("/api/embedded-editor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: getFilename(),
+        content_base64: base64
+      })
+    });
+
+    var result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Не удалось открыть редактор");
+    }
+
+    editorFrame.onload = function () {
+      hideState();
+    };
+    editorFrame.src = result.edit_url;
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () {
+      openEmbeddedEditor().catch(function (error) {
+        setState(error.message || "Не удалось открыть редактор", true);
+      });
+    });
+  } else {
+    openEmbeddedEditor().catch(function (error) {
+      setState(error.message || "Не удалось открыть редактор", true);
+    });
+  }
+})();
+</script>
+</body>
+</html>

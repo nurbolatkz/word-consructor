@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Конструктор шаблонов</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --surface: #ffffff;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --chip-bg: #f0f5fa;
+      --chip-hover: #dce8f5;
+      --shadow: 0 10px 30px rgba(15,23,42,.06);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #e9eff5 0%, var(--bg) 180px);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 20;
+    }
+
+    .back-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .topbar-meta {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .topbar-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 3px;
+    }
+
+    .topbar-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .btn {
+      padding: 8px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+      position: relative;
+      z-index: 21;
+    }
+
+    .btn:hover:not(:disabled) { background: #f7fafc; }
+    .btn:disabled { opacity: .55; cursor: default; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dark); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .sidebar,
+    .editor-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      min-height: 0;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-head {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .sidebar-head h2 {
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+
+    .sidebar-head p {
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
+    .add-param-row {
+      display: flex;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .add-param-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 13px;
+      background: #f8fafc;
+      outline: none;
+    }
+
+    .add-param-row input:focus {
+      background: #fff;
+      border-color: var(--accent);
+    }
+
+    .chips-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .chip {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 10px 10px 12px;
+      background: var(--chip-bg);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin-bottom: 8px;
+    }
+
+    .chip.dragging { opacity: .65; }
+    .chip-main { min-width: 0; }
+
+    .chip-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chip-token {
+      font-size: 11px;
+      font-family: "Consolas", "Courier New", monospace;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chip-btn {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .chip-btn:hover { background: var(--chip-hover); }
+
+    .chip-del {
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: #b42318;
+      font-size: 17px;
+      cursor: pointer;
+    }
+
+    .sidebar-note {
+      padding: 12px 14px 14px;
+      border-top: 1px solid var(--line);
+      font-size: 11px;
+      line-height: 1.55;
+      color: var(--muted);
+      background: #fbfcfd;
+    }
+
+    .editor-card {
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .editor-drop.drag-over {
+      outline: 2px dashed var(--accent);
+      outline-offset: -8px;
+    }
+
+    .editor-drop {
+      height: 100%;
+      min-height: 0;
+    }
+
+    #editor {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+
+    #uploadInput { display: none; }
+
+    #toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      max-width: 360px;
+      padding: 11px 16px;
+      border-radius: 10px;
+      background: #1a2e42;
+      color: #e8f2ff;
+      font-size: 13px;
+      display: none;
+      z-index: 9999;
+    }
+
+    #toast.error {
+      background: #b42318;
+      color: #fff;
+    }
+
+    @media (max-width: 980px) {
+      .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: 280px minmax(0, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <input type="file" id="uploadInput" accept=".docx">
+
+  <div class="topbar">
+    <a class="back-link" href="/services/word-constructor">← Назад</a>
+    <div class="topbar-meta">
+      <div class="topbar-title">KazUni Конструктор шаблонов</div>
+      <div class="topbar-subtitle">{{ filename }} · сессия активна до {{ expires_at }}</div>
+    </div>
+    <button class="btn" id="btnUpload">Открыть .docx</button>
+    <button class="btn btn-primary" id="btnDownload">Скачать .docx</button>
+  </div>
+
+  <div class="workspace">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>Параметры</h2>
+        <p>Кнопка «Копировать» вставляет плейсхолдер в буфер обмена.</p>
+      </div>
+      <div class="add-param-row">
+        <input id="newParamInput" type="text" placeholder="Новый параметр">
+        <button class="btn" id="btnAddParam">Добавить</button>
+      </div>
+      <div class="chips-list" id="chipsList"></div>
+      <div class="sidebar-note">
+        Формат токена: <code>[ИмяПараметра]</code>. Этот же формат понимает текущий генератор документов для 1С.
+      </div>
+    </aside>
+
+    <section class="editor-card">
+      <div class="editor-drop" id="editorDrop">
+        <div id="editor"></div>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="/onlyoffice/web-apps/apps/api/documents/api.js"></script>
+  <script>
+    (function () {
+      "use strict";
+
+      var sessionId = {{ session_id | tojson }};
+      var initialParams = {{ session_params | tojson }};
+      var from1c = new URLSearchParams(window.location.search).get("source") === "from1c";
+      var configUrl = "/services/word-constructor/api/template-builder/" + sessionId + "/onlyoffice/config";
+      var uploadUrl = "/services/word-constructor/api/template-builder/" + sessionId + "/document";
+      var paramsUrl = "/services/word-constructor/api/template-builder/" + sessionId + "/params";
+      var forceSaveUrl = "/services/word-constructor/api/template-builder/" + sessionId + "/forcesave";
+      var downloadUrl = "/services/word-constructor/api/template-builder/" + sessionId + "/download";
+      var params = [];
+      var docEditor = null;
+      var dragParam = null;
+      var forceSaveTimer = null;
+      var forceSaveInFlight = false;
+      var forceSaveQueued = false;
+
+      function xhrRequest(method, url, options, onDone) {
+        options = options || {};
+        var req = new XMLHttpRequest();
+        req.open(method, url, true);
+        if (options.headers) {
+          for (var key in options.headers) {
+            if (Object.prototype.hasOwnProperty.call(options.headers, key)) {
+              req.setRequestHeader(key, options.headers[key]);
+            }
+          }
+        }
+        req.onload = function () {
+          var text = req.responseText || "";
+          var data = null;
+          if (text) {
+            try {
+              data = JSON.parse(text);
+            } catch (e) {
+              data = text;
+            }
+          }
+          onDone(req.status >= 200 && req.status < 300, {
+            status: req.status,
+            data: data
+          });
+        };
+        req.onerror = function () {
+          onDone(false, {
+            status: 0,
+            data: { error: "network" }
+          });
+        };
+        req.send(options.body || null);
+      }
+
+      function showToast(message, isError) {
+        var toast = document.getElementById("toast");
+        toast.textContent = message;
+        toast.className = isError ? "error" : "";
+        toast.style.display = "block";
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(function () {
+          toast.style.display = "none";
+        }, 3200);
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function copyToken(name, onDone) {
+        var token = "[" + name + "]";
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(token).then(function () {
+            showToast("Скопировано: " + token + ". Вставьте в документ через Ctrl+V.", false);
+            if (onDone) onDone(true);
+          }, function () {
+            showToast("Не удалось скопировать " + token, true);
+            if (onDone) onDone(false);
+          });
+          return;
+        }
+
+        var temp = document.createElement("input");
+        temp.type = "text";
+        temp.value = token;
+        document.body.appendChild(temp);
+        temp.select();
+        try {
+          document.execCommand("copy");
+          showToast("Скопировано: " + token + ". Вставьте в документ через Ctrl+V.", false);
+          if (onDone) onDone(true);
+        } catch (e) {
+          showToast("Не удалось скопировать " + token, true);
+          if (onDone) onDone(false);
+        }
+        document.body.removeChild(temp);
+      }
+
+      function syncParams(onDone) {
+        xhrRequest("POST", paramsUrl, {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ params: params })
+        }, function (ok, response) {
+          if (!ok) {
+            if (onDone) onDone(false, response);
+            return;
+          }
+          if (onDone) onDone(true, response);
+        });
+      }
+
+      function requestForceSave(onDone) {
+        if (forceSaveInFlight) {
+          forceSaveQueued = true;
+          if (onDone) onDone(true);
+          return;
+        }
+
+        forceSaveInFlight = true;
+        xhrRequest("POST", forceSaveUrl, {}, function (ok, response) {
+          forceSaveInFlight = false;
+          if (!ok) {
+            var payload = response.data || {};
+            showToast("Ошибка автосохранения: " + (payload.error || ("forcesave " + response.status)), true);
+            if (onDone) onDone(false, response);
+          } else {
+            if (onDone) onDone(true, response);
+          }
+
+          if (forceSaveQueued) {
+            forceSaveQueued = false;
+            scheduleForceSave(1500);
+          }
+        });
+      }
+
+      function downloadCurrentDocument() {
+        var button = document.getElementById("btnDownload");
+        button.disabled = true;
+        requestForceSave(function (ok) {
+          button.disabled = false;
+          if (!ok) {
+            showToast("Ошибка сохранения перед скачиванием", true);
+            return;
+          }
+          var link = document.createElement("a");
+          link.href = downloadUrl + "?t=" + new Date().getTime();
+          link.rel = "noopener";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        });
+      }
+
+      function scheduleForceSave(delay) {
+        clearTimeout(forceSaveTimer);
+        forceSaveTimer = setTimeout(function () {
+          requestForceSave();
+        }, delay);
+      }
+
+      function handleDocumentStateChange(event) {
+        if (event && event.data === true) {
+          scheduleForceSave(2500);
+        } else {
+          scheduleForceSave(1000);
+        }
+      }
+
+      function renderChips() {
+        var list = document.getElementById("chipsList");
+        list.innerHTML = "";
+        for (var i = 0; i < params.length; i++) {
+          var name = params[i];
+          var chip = document.createElement("div");
+          chip.className = "chip";
+          chip.draggable = true;
+          chip.setAttribute("data-param", name);
+          chip.innerHTML =
+            '<div class="chip-main">' +
+              '<div class="chip-name">' + escapeHtml(name) + '</div>' +
+              '<div class="chip-token">[' + escapeHtml(name) + ']</div>' +
+            '</div>' +
+            '<button class="chip-btn" data-action="copy" data-idx="' + i + '">Копировать</button>' +
+            '<button class="chip-del" data-action="delete" data-idx="' + i + '" title="Удалить">×</button>';
+          list.appendChild(chip);
+        }
+
+        var chips = document.querySelectorAll(".chip");
+        for (var j = 0; j < chips.length; j++) {
+          chips[j].addEventListener("dragstart", function () {
+            dragParam = this.getAttribute("data-param");
+            this.classList.add("dragging");
+          });
+          chips[j].addEventListener("dragend", function () {
+            dragParam = null;
+            this.classList.remove("dragging");
+            document.getElementById("editorDrop").classList.remove("drag-over");
+          });
+        }
+      }
+
+      function hasParam(name) {
+        for (var i = 0; i < params.length; i++) {
+          if (params[i] === name) return true;
+        }
+        return false;
+      }
+
+      function addParam(name, onDone) {
+        var clean = String(name || "").replace(/^\s+|\s+$/g, "");
+        if (!clean || hasParam(clean)) {
+          if (onDone) onDone(true);
+          return;
+        }
+        params.push(clean);
+        renderChips();
+        syncParams(onDone);
+      }
+
+      function removeParam(index, onDone) {
+        params.splice(index, 1);
+        renderChips();
+        syncParams(onDone);
+      }
+
+      function loadEditor() {
+        xhrRequest("GET", configUrl, {}, function (ok, response) {
+          if (!ok) {
+            showToast("Не удалось загрузить OnlyOffice: config " + response.status, true);
+            return;
+          }
+          var config = response.data || {};
+          if (!config.events) {
+            config.events = {};
+          }
+          config.events.onDocumentStateChange = handleDocumentStateChange;
+          docEditor = new DocsAPI.DocEditor("editor", config);
+        });
+      }
+
+      function replaceDocument(file) {
+        var formData = new FormData();
+        formData.append("document", file);
+        xhrRequest("POST", uploadUrl, { body: formData }, function (ok, response) {
+          var payload = response.data || {};
+          if (!ok) {
+            showToast("Ошибка загрузки: " + (payload.error || ("upload " + response.status)), true);
+            return;
+          }
+          showToast("Документ загружен. Перезапускаю редактор…", false);
+          var targetUrl = "/services/word-constructor/template-builder/" + sessionId + (window.location.search || "");
+          window.location.assign(targetUrl);
+        });
+      }
+
+      document.getElementById("btnAddParam").addEventListener("click", function () {
+        var input = document.getElementById("newParamInput");
+        addParam(input.value, function (ok, response) {
+          if (!ok) {
+            showToast("Ошибка сохранения параметров: params " + response.status, true);
+            return;
+          }
+          input.value = "";
+          input.focus();
+        });
+      });
+
+      document.getElementById("newParamInput").addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          var input = event.currentTarget;
+          addParam(input.value, function (ok, response) {
+            if (!ok) {
+              showToast("Ошибка сохранения параметров: params " + response.status, true);
+              return;
+            }
+            input.value = "";
+          });
+        }
+      });
+
+      document.getElementById("chipsList").addEventListener("click", function (event) {
+        var target = event.target || event.srcElement;
+        while (target && target !== this && !target.getAttribute("data-action")) {
+          target = target.parentNode;
+        }
+        if (!target || target === this) {
+          return;
+        }
+        var action = target.getAttribute("data-action");
+        var index = parseInt(target.getAttribute("data-idx"), 10);
+        if (action === "copy") {
+          copyToken(params[index]);
+        } else if (action === "delete") {
+          removeParam(index, function (ok, response) {
+            if (!ok) {
+              showToast("Ошибка сохранения параметров: params " + response.status, true);
+            }
+          });
+        }
+      });
+
+      document.getElementById("btnUpload").addEventListener("click", function () {
+        document.getElementById("uploadInput").click();
+      });
+
+      document.getElementById("uploadInput").addEventListener("change", function (event) {
+        var file = event.target.files && event.target.files[0];
+        if (!file) {
+          return;
+        }
+        replaceDocument(file);
+        event.target.value = "";
+      });
+
+      document.getElementById("btnDownload").addEventListener("click", function () {
+        downloadCurrentDocument();
+      });
+
+      var editorDrop = document.getElementById("editorDrop");
+      editorDrop.addEventListener("dragover", function (event) {
+        if (!dragParam) {
+          return;
+        }
+        event.preventDefault();
+        editorDrop.classList.add("drag-over");
+      });
+      editorDrop.addEventListener("dragleave", function () {
+        editorDrop.classList.remove("drag-over");
+      });
+      editorDrop.addEventListener("drop", function (event) {
+        if (!dragParam) {
+          return;
+        }
+        event.preventDefault();
+        editorDrop.classList.remove("drag-over");
+        copyToken(dragParam);
+      });
+
+      for (var i = 0; i < initialParams.length; i++) {
+        var clean = String(initialParams[i] || "").replace(/^\s+|\s+$/g, "");
+        if (clean && !hasParam(clean)) {
+          params.push(clean);
+        }
+      }
+
+      if (from1c) {
+        document.getElementById("btnUpload").style.display = "none";
+        document.getElementById("btnDownload").style.display = "none";
+      }
+
+      renderChips();
+      loadEditor();
+    })();
+  </script>
+</body>
+</html>

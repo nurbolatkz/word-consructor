@@ -1,0 +1,86 @@
+[
+  {
+    "id": "22ce3d8104d44030b6efd48251103db6",
+    "original_name": "FILENAME",
+    "stored_name": "22ce3d8104d44030b6efd48251103db6_FILENAME",
+    "uploaded_at": "2026-03-29T15:52:01.675348+00:00",
+    "size_bytes": 29175,
+    "mime_type": "application/octet-stream",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-31T12:22:39.894027+00:00",
+    "last_error": null
+  },
+  {
+    "id": "7785a6ca5b3040f894e839043805407c",
+    "original_name": "FILENAME",
+    "stored_name": "7785a6ca5b3040f894e839043805407c_FILENAME",
+    "uploaded_at": "2026-03-29T15:50:12.519423+00:00",
+    "size_bytes": 29175,
+    "mime_type": "application/octet-stream",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-31T12:22:18.178062+00:00",
+    "last_error": null
+  },
+  {
+    "id": "e6a04c6aaf564552a74a188f20d13560",
+    "original_name": "test.txt",
+    "stored_name": "e6a04c6aaf564552a74a188f20d13560_test.txt",
+    "uploaded_at": "2026-03-29T15:14:36.676108+00:00",
+    "size_bytes": 5,
+    "mime_type": "text/plain",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-31T12:22:19.374737+00:00",
+    "last_error": null
+  },
+  {
+    "id": "5e6a3f6001f24d2aa7bdd14e4d65e387",
+    "original_name": "docx",
+    "stored_name": "5e6a3f6001f24d2aa7bdd14e4d65e387_docx",
+    "uploaded_at": "2026-03-29T14:27:25.089104+00:00",
+    "size_bytes": 29161,
+    "mime_type": "application/octet-stream",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-29T14:54:47.457041+00:00",
+    "last_error": null
+  },
+  {
+    "id": "6243e8523285405199b49fa8343af27d",
+    "original_name": "25-12.docx",
+    "stored_name": "6243e8523285405199b49fa8343af27d_25-12.docx",
+    "uploaded_at": "2026-03-29T12:32:50.348838+00:00",
+    "size_bytes": 14273349,
+    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-29T12:33:39.034384+00:00",
+    "last_error": null
+  },
+  {
+    "id": "bfb90fcdce364ca8bbfd9355d13cad7e",
+    "original_name": "b64encode.doc",
+    "stored_name": "bfb90fcdce364ca8bbfd9355d13cad7e_b64encode.doc",
+    "uploaded_at": "2026-03-29T12:13:37.414018+00:00",
+    "size_bytes": 10757,
+    "mime_type": "application/msword",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-29T12:13:53.361662+00:00",
+    "last_error": null
+  },
+  {
+    "id": "1188726d8f5e418eb7773c93929fb371",
+    "original_name": "tmp.77wGETZWAf.txt",
+    "stored_name": "1188726d8f5e418eb7773c93929fb371_tmp.77wGETZWAf.txt",
+    "uploaded_at": "2026-03-29T12:12:42.026283+00:00",
+    "size_bytes": 18,
+    "mime_type": "text/plain",
+    "preview_status": "ready",
+    "expires_at": null,
+    "preview_updated_at": "2026-03-29T12:12:45.709661+00:00",
+    "last_error": null
+  }
+]

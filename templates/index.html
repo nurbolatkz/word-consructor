@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kazuni Doc Editor</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-alt: #f8fafc;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --soft: #edf2f7;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #eef2f6 0%, var(--bg) 180px);
+    }
+
+    .shell {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 24px 48px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .hero,
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 28px 32px;
+      margin-bottom: 20px;
+    }
+
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: 30px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 18px;
+    }
+
+    .card {
+      padding: 22px;
+    }
+
+    .upload-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    input[type="file"] {
+      width: 100%;
+      padding: 12px 13px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font: inherit;
+      background: var(--surface-alt);
+      color: var(--text);
+    }
+
+    .button,
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+    }
+
+    .button:hover,
+    button:hover {
+      background: var(--accent-dark);
+    }
+
+    .button.secondary {
+      color: var(--text);
+      background: var(--soft);
+      border: 1px solid var(--line);
+    }
+
+    .status {
+      min-height: 22px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .section-label {
+      margin: 18px 0 10px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .docs {
+      display: grid;
+      gap: 10px;
+      max-height: 70vh;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .doc {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface-alt);
+      cursor: pointer;
+    }
+
+    .doc h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .doc.active {
+      border-color: #aebfd1;
+      background: #f3f7fb;
+      box-shadow: inset 0 0 0 1px #c8d5e2;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+      min-height: 76vh;
+    }
+
+    .workspace-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .workspace-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.3;
+    }
+
+    .workspace-meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .workspace-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .panes {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      min-height: 0;
+    }
+
+    .panes.with-preview {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .pane {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+    }
+
+    .pane-label {
+      margin: 0 0 8px;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+
+    .viewer {
+      min-height: 68vh;
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 68vh;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      background: var(--surface-alt);
+      text-align: center;
+      padding: 24px;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    @media (max-width: 940px) {
+      .shell {
+        padding: 24px 16px 36px;
+      }
+
+      .grid,
+      .panes.with-preview {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        padding: 24px;
+      }
+
+      .hero h1 {
+        font-size: 26px;
+      }
+
+      .viewer,
+      .empty-state {
+        min-height: 56vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="back-link" href="/">← Все сервисы</a>
+    </div>
+
+    <section class="hero">
+      <h1>Document Editor</h1>
+      <p>Загрузите документ, откройте его в браузерном редакторе и при необходимости включите PDF preview рядом.</p>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <form class="upload-form" id="upload-form">
+          <input type="file" id="file-input" name="file" required>
+          <button type="submit">Загрузить документ</button>
+        </form>
+        <div class="status" id="status"></div>
+        <div class="section-label">Документы</div>
+        <div class="docs" id="documents"></div>
+      </section>
+
+      <section class="card workspace">
+        <div class="workspace-bar">
+          <div>
+            <h2 class="workspace-title" id="workspace-title">Выберите документ</h2>
+            <div class="workspace-meta" id="workspace-meta">После загрузки документ откроется здесь.</div>
+          </div>
+          <div class="workspace-actions">
+            <button type="button" class="button secondary" id="toggle-preview" disabled>Show preview</button>
+            <button type="button" class="button secondary" id="refresh-preview" disabled>Обновить preview</button>
+          </div>
+        </div>
+        <div class="panes" id="workspace-content">
+          <div class="pane">
+            <p class="pane-label">Browser Edit</p>
+            <div class="empty-state">Редактор появится здесь после выбора документа.</div>
+          </div>
+          <div class="pane">
+            <p class="pane-label">PDF Preview</p>
+            <div class="empty-state">Preview появится здесь после выбора документа.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const initialDocuments = {{ documents | tojson }};
+    const listNode = document.getElementById('documents');
+    const statusNode = document.getElementById('status');
+    const uploadForm = document.getElementById('upload-form');
+    const fileInput = document.getElementById('file-input');
+    const workspaceTitle = document.getElementById('workspace-title');
+    const workspaceMeta = document.getElementById('workspace-meta');
+    const workspaceContent = document.getElementById('workspace-content');
+    const togglePreviewButton = document.getElementById('toggle-preview');
+    const refreshPreviewButton = document.getElementById('refresh-preview');
+    let currentDocuments = initialDocuments;
+    let selectedDocumentId = initialDocuments[0]?.id || null;
+    let previewVisible = false;
+
+    function setStatus(message) {
+      statusNode.textContent = message || '';
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes)) return '';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let value = bytes;
+      let index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+      }
+      return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+    }
+
+    function upsertDocument(nextDoc) {
+      const existingIndex = currentDocuments.findIndex((doc) => doc.id === nextDoc.id);
+      if (existingIndex === -1) {
+        currentDocuments = [nextDoc, ...currentDocuments];
+        return;
+      }
+      currentDocuments = currentDocuments.map((doc) => doc.id === nextDoc.id ? nextDoc : doc);
+    }
+
+    function formatExpiry(expiresAt) {
+      if (!expiresAt) return '';
+      const value = new Date(expiresAt);
+      if (Number.isNaN(value.getTime())) return '';
+      return value.toLocaleString();
+    }
+
+    function renderWorkspace(doc) {
+      if (!doc) {
+        workspaceTitle.textContent = 'Выберите документ';
+        workspaceMeta.textContent = 'После загрузки документ откроется здесь.';
+        togglePreviewButton.disabled = true;
+        togglePreviewButton.textContent = 'Show preview';
+        refreshPreviewButton.disabled = true;
+        workspaceContent.innerHTML = `
+          <div class="pane">
+            <p class="pane-label">Browser Edit</p>
+            <div class="empty-state">Редактор появится здесь после выбора документа.</div>
+          </div>
+          <div class="pane">
+            <p class="pane-label">PDF Preview</p>
+            <div class="empty-state">Preview появится здесь после выбора документа.</div>
+          </div>
+        `;
+        return;
+      }
+
+      workspaceTitle.textContent = doc.original_name;
+      const expiryLabel = formatExpiry(doc.expires_at);
+      workspaceMeta.textContent = expiryLabel
+        ? `Размер: ${formatBytes(doc.size_bytes)} · Статус preview: ${doc.preview_status} · Будет удален: ${expiryLabel}`
+        : `Размер: ${formatBytes(doc.size_bytes)} · Статус preview: ${doc.preview_status}`;
+      togglePreviewButton.disabled = false;
+      togglePreviewButton.textContent = previewVisible ? 'Hide preview' : 'Show preview';
+      refreshPreviewButton.disabled = false;
+      refreshPreviewButton.dataset.refresh = doc.id;
+      workspaceContent.className = `panes${previewVisible ? ' with-preview' : ''}`;
+      workspaceContent.innerHTML = `
+        <div class="pane">
+          <p class="pane-label">Browser Edit</p>
+          <iframe class="viewer" src="/documents/${doc.id}/edit?embed=1" title="Browser editor"></iframe>
+        </div>
+        ${previewVisible ? `
+        <div class="pane">
+          <p class="pane-label">PDF Preview</p>
+          <iframe class="viewer" src="/api/documents/${doc.id}/preview?ts=${Date.now()}" title="PDF preview"></iframe>
+        </div>
+        ` : ''}
+      `;
+    }
+
+    function renderDocuments(documents) {
+      listNode.innerHTML = '';
+      if (documents.length === 0) {
+        listNode.innerHTML = '<div class="meta">Список пуст. Загруженные документы видны только в текущей вкладке и удаляются автоматически.</div>';
+      }
+      documents.forEach((doc) => {
+        const item = document.createElement('article');
+        item.className = `doc${doc.id === selectedDocumentId ? ' active' : ''}`;
+        item.dataset.select = doc.id;
+        item.innerHTML = `
+          <h3>${doc.original_name}</h3>
+          <p class="meta">Статус preview: ${doc.preview_status}<br>Размер: ${formatBytes(doc.size_bytes)}</p>
+        `;
+        listNode.appendChild(item);
+      });
+
+      renderWorkspace(documents.find((doc) => doc.id === selectedDocumentId) || null);
+    }
+
+    async function postAction(url, message) {
+      setStatus(message);
+      const response = await fetch(url, { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.details || payload.error || 'Request failed');
+      }
+      return payload;
+    }
+
+    uploadForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = fileInput.files[0];
+      if (!file) {
+        setStatus('Выберите файл.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', file);
+      setStatus('Загрузка...');
+
+      const response = await fetch('/api/documents', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        setStatus(payload.error || 'Ошибка загрузки');
+        return;
+      }
+
+      fileInput.value = '';
+      setStatus(`Загружен файл: ${payload.original_name}`);
+      selectedDocumentId = payload.id;
+      upsertDocument(payload);
+      renderDocuments(currentDocuments);
+    });
+
+    listNode.addEventListener('click', async (event) => {
+      const docCard = event.target.closest('[data-select]');
+      if (docCard) {
+        selectedDocumentId = docCard.dataset.select;
+        renderDocuments(currentDocuments);
+      }
+    });
+
+    togglePreviewButton.addEventListener('click', () => {
+      if (!selectedDocumentId) return;
+      previewVisible = !previewVisible;
+      renderDocuments(currentDocuments);
+    });
+
+    refreshPreviewButton.addEventListener('click', async () => {
+      const refreshId = refreshPreviewButton.dataset.refresh;
+      if (!refreshId) return;
+      try {
+        const payload = await postAction(`/api/documents/${refreshId}/refresh`, 'Обновление preview...');
+        previewVisible = true;
+        upsertDocument(payload);
+        renderDocuments(currentDocuments);
+        setStatus('Preview обновлен.');
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+
+    renderDocuments(currentDocuments);
+  </script>
+</body>
+</html>
