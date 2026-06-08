@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Word Constructor</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --surface: #fff;
+      --line: #d6dde5;
+      --text: #142433;
+      --muted: #5c6b7a;
+      --accent: #1f4b7a;
+      --accent-dark: #163a5e;
+      --ok: #217346;
+      --err: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .shell { max-width: 980px; margin: 0 auto; padding: 24px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    h1 { margin: 0; font-size: 24px; font-weight: 700; }
+    .sub { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 16px; align-items: start; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 17px; }
+    .muted { color: var(--muted); font-size: 13px; line-height: 1.55; }
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    input[type="file"], textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fafbfc;
+      color: var(--text);
+      font: 13px/1.45 "Consolas", "Courier New", monospace;
+    }
+    textarea { min-height: 96px; resize: vertical; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    button, .button {
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 9px 14px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button:hover, .button:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+    .button.secondary { background: #fff; color: var(--accent); }
+    .button.secondary:hover { background: #f0f5fa; }
+    .status { display: none; margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+    .status.ok { display: block; background: #e8f5e9; border: 1px solid #a5d6a7; color: #174b2d; }
+    .status.err { display: block; background: #fdecea; border: 1px solid #f5c6cb; color: var(--err); }
+    code { background: #eef2f6; border-radius: 4px; padding: 1px 5px; font-family: Consolas, monospace; font-size: 12px; }
+    .endpoint { display: grid; grid-template-columns: 72px 1fr; gap: 8px; align-items: center; margin: 8px 0; }
+    .method { background: var(--accent); color: #fff; border-radius: 5px; padding: 4px 7px; font-size: 11px; font-weight: 700; text-align: center; }
+    .path { font-family: Consolas, monospace; font-size: 12px; word-break: break-all; }
+    .split { height: 1px; background: var(--line); margin: 16px 0; }
+    @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } .shell { padding: 16px; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div>
+      <h1>Word Constructor</h1>
+      <p class="sub">Загрузка Word-документа, редактирование в OnlyOffice, обмен с 1С.</p>
+    </div>
+    <a class="button secondary" href="/health">Health</a>
+  </div>
+
+  <div class="grid">
+    <main class="card">
+      <h2>Открыть Word в OnlyOffice</h2>
+      <p class="muted">Загрузите <code>.docx</code>, при необходимости добавьте список параметров 1С. Документ откроется в OnlyOffice, где можно редактировать файл и отправить результат обратно.</p>
+
+      <form id="ooForm">
+        <label for="ooFile">Word документ (.docx)</label>
+        <input id="ooFile" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+
+        <label for="ooParams">Параметры 1С</label>
+        <textarea id="ooParams" spellcheck="false" placeholder='["ФИО", "Дата", "Номер"]'>[]</textarea>
+
+        <div class="actions">
+          <button type="submit">Открыть в OnlyOffice</button>
+          <a class="button secondary" href="/services/word-constructor/template-builder">Создать пустой шаблон</a>
+        </div>
+      </form>
+      <div id="ooStatus" class="status"></div>
+
+      <div class="split"></div>
+
+      <h2>Заполнить шаблон и открыть редактор</h2>
+      <p class="muted">Этот режим использует шаблон с плейсхолдерами <code>{{ключ}}</code> или <code>[Ключ]</code> и значения параметров.</p>
+
+      <form id="fillForm">
+        <label for="fillFile">Шаблон Word (.docx)</label>
+        <input id="fillFile" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+
+        <label for="fillParams">Значения параметров JSON</label>
+        <textarea id="fillParams" spellcheck="false" placeholder='{"ФИО": "Иванов И.И.", "Дата": "08.06.2026"}'>{}</textarea>
+
+        <div class="actions">
+          <button type="submit">Создать сессию</button>
+        </div>
+      </form>
+      <div id="fillStatus" class="status"></div>
+    </main>
+
+    <aside class="card">
+      <h2>API для 1С</h2>
+      <div class="endpoint"><span class="method">POST</span><span class="path">/services/word-constructor/api/1c/replace</span></div>
+      <p class="muted">Без сессии: отправить <code>.docx</code> и JSON <code>{"Ключ":"Значение"}</code>, получить готовый <code>.docx</code> в ответ.</p>
+
+      <div class="endpoint"><span class="method">POST</span><span class="path">/services/word-constructor/api/1c/replace-edit</span></div>
+      <p class="muted">Создать ручную OnlyOffice-сессию из замененного документа. 1С получает <code>editor_url</code> для пользователя и <code>update_url</code> для кнопки <code>Обновить</code>.</p>
+
+      <div class="endpoint"><span class="method">POST</span><span class="path">/services/word-constructor/api/1c/template-builder/bridge</span></div>
+      <p class="muted">1С отправляет Word и список параметров, получает <code>session_id</code>, <code>builder_url</code>, <code>status_url</code>, <code>download_url</code>.</p>
+
+      <div class="endpoint"><span class="method">GET</span><span class="path">/services/word-constructor/api/template-builder/{id}/status</span></div>
+      <p class="muted">Опрос до <code>status = ready</code>.</p>
+
+      <div class="endpoint"><span class="method">GET</span><span class="path">/services/word-constructor/api/template-builder/{id}/download</span></div>
+      <p class="muted">Скачать готовый отредактированный <code>.docx</code>.</p>
+
+      <div class="split"></div>
+      <h2>OnlyOffice</h2>
+      <p class="muted">В Docker публикация идет через основной домен. Для production задайте <code>ONLYOFFICE_PUBLIC_BASE_URL=https://domain/onlyoffice</code>.</p>
+    </aside>
+  </div>
+</div>
+
+<script>
+function showStatus(id, text, isError) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'status ' + (isError ? 'err' : 'ok');
+}
+
+function parseJson(text, fallback) {
+  const raw = text.trim();
+  if (!raw) return fallback;
+  return JSON.parse(raw);
+}
+
+document.getElementById('ooForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const file = document.getElementById('ooFile').files[0];
+  const fd = new FormData();
+  try {
+    const params = parseJson(document.getElementById('ooParams').value, []);
+    fd.append('params', JSON.stringify(params));
+    if (file) fd.append('document', file);
+  } catch (err) {
+    showStatus('ooStatus', 'Ошибка JSON параметров: ' + err.message, true);
+    return;
+  }
+
+  showStatus('ooStatus', 'Создание сессии...', false);
+  try {
+    const res = await fetch('/services/word-constructor/api/template-builder/create', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    window.location.href = data.builder_url;
+  } catch (err) {
+    showStatus('ooStatus', 'Ошибка: ' + err.message, true);
+  }
+});
+
+document.getElementById('fillForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const file = document.getElementById('fillFile').files[0];
+  if (!file) {
+    showStatus('fillStatus', 'Выберите .docx файл.', true);
+    return;
+  }
+  const fd = new FormData();
+  try {
+    const params = parseJson(document.getElementById('fillParams').value, {});
+    fd.append('template', file);
+    fd.append('params', JSON.stringify(params));
+  } catch (err) {
+    showStatus('fillStatus', 'Ошибка JSON параметров: ' + err.message, true);
+    return;
+  }
+
+  showStatus('fillStatus', 'Создание сессии...', false);
+  try {
+    const res = await fetch('/services/word-constructor/api/create', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    window.location.href = data.editor_url;
+  } catch (err) {
+    showStatus('fillStatus', 'Ошибка: ' + err.message, true);
+  }
+});
+</script>
+</body>
+</html>

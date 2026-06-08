@@ -1,0 +1,56 @@
+services:
+  word-portal:
+    build: .
+    container_name: word-portal
+    restart: unless-stopped
+    environment:
+      FLASK_HOST: 0.0.0.0
+      FLASK_PORT: 5000
+      ONLYOFFICE_INTERNAL_BASE_URL: http://word-portal:5000
+      ONLYOFFICE_SERVICE_BASE_URL: http://onlyoffice
+      ONLYOFFICE_PUBLIC_BASE_URL: ${ONLYOFFICE_PUBLIC_BASE_URL:-/onlyoffice}
+      ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-change-me}
+      MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-33554432}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-2100}
+      TEMPLATE_BUILDER_SESSION_TTL_SECONDS: ${TEMPLATE_BUILDER_SESSION_TTL_SECONDS:-2100}
+    volumes:
+      - word_constructor_tmp:/tmp/kazuni_word_constructor
+    depends_on:
+      onlyoffice:
+        condition: service_started
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: word-portal-onlyoffice
+    restart: unless-stopped
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-change-me}
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "true"
+    ports:
+      - "${ONLYOFFICE_PORT:-8082}:80"
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+      - onlyoffice_lib:/var/lib/onlyoffice
+      - onlyoffice_db:/var/lib/postgresql
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: word-portal-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - word-portal
+      - onlyoffice
+
+volumes:
+  word_constructor_tmp:
+  onlyoffice_data:
+  onlyoffice_logs:
+  onlyoffice_lib:
+  onlyoffice_db:
