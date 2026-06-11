@@ -85,3 +85,23 @@ Then send params:
 The service clones the template row once per array item and replaces field placeholders from each object.
 
 For replace-edit sessions, the editor opens with a `Записать и Закрыть` button. After the user clicks it, poll `status_url` until `status` is `ready`; the response includes `download_url`. Downloading that URL returns the saved `.docx` and deletes the session files from the server.
+
+## Admin clients and tokens
+
+Admin cabinet:
+
+```text
+/services/word-constructor/admin
+```
+
+Set `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `ADMIN_SESSION_SECRET` in production. The sample defaults are `admin` / `admin`. After login, the cabinet can change the admin password; the changed password is stored hashed in `CLIENT_STORE_PATH` and takes precedence over `ADMIN_PASSWORD`.
+
+Create a service client in the cabinet, copy the generated token once, and send it from 1C/API clients on protected endpoints:
+
+```text
+Authorization: Bearer <token>
+```
+
+`X-Client-Token: <token>` is also accepted. Tokens can have an expiration time; expired or disabled clients receive `403`. The cabinet tracks total calls, request bytes, response bytes, last call time, and last called path.
+
+Protected client endpoints include `/services/word-constructor/api/1c/...`. Template-builder status and download URLs created by a token-authenticated 1C bridge request also require a valid token from the same client.

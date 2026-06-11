@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login</title>
+  <style>
+    :root { --bg:#eef2f6; --surface:#fff; --line:#d6dde5; --text:#142433; --muted:#5c6b7a; --accent:#1f4b7a; --err:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif; }
+    main { width:min(420px, calc(100vw - 32px)); background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:24px; }
+    h1 { margin:0 0 6px; font-size:22px; }
+    p { margin:0 0 18px; color:var(--muted); font-size:13px; }
+    label { display:block; margin:14px 0 6px; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; }
+    input { width:100%; border:1px solid var(--line); border-radius:8px; padding:10px 11px; font-size:14px; }
+    button { width:100%; margin-top:18px; border:1px solid var(--accent); border-radius:8px; padding:10px 14px; background:var(--accent); color:#fff; font-size:14px; font-weight:700; cursor:pointer; }
+    .error { margin:0 0 12px; padding:10px 12px; border:1px solid #f3b5ad; border-radius:8px; color:var(--err); background:#fdecea; font-size:13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Admin cabinet</h1>
+    <p>Client tokens and service usage stats.</p>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="post" action="/services/word-constructor/admin/login">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Log in</button>
+    </form>
+  </main>
+</body>
+</html>

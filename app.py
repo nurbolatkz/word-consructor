@@ -21,6 +21,7 @@ from word_constructor.app import (
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.secret_key = os.environ.get("ADMIN_SESSION_SECRET", os.environ.get("SECRET_KEY", "dev-admin-session-secret"))
     app.config["MAX_CONTENT_LENGTH"] = int(
         os.environ.get("MAX_CONTENT_LENGTH", str(32 * 1024 * 1024))
     )

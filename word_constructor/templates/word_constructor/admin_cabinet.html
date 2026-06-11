@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Cabinet</title>
+  <style>
+    :root { --bg:#eef2f6; --surface:#fff; --line:#d6dde5; --text:#142433; --muted:#5c6b7a; --accent:#1f4b7a; --ok:#217346; --warn:#9a6700; --err:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif; }
+    .shell { max-width:1180px; margin:0 auto; padding:24px; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+    h1 { margin:0; font-size:24px; }
+    .sub { margin:5px 0 0; color:var(--muted); font-size:13px; }
+    .panel { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:18px; margin-bottom:16px; }
+    .grid { display:grid; grid-template-columns:1fr 220px auto; gap:12px; align-items:end; }
+    label { display:block; margin:0 0 6px; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; }
+    input { width:100%; border:1px solid var(--line); border-radius:8px; padding:9px 10px; font-size:14px; }
+    button { border:1px solid var(--accent); border-radius:8px; padding:9px 14px; background:var(--accent); color:#fff; font-size:14px; font-weight:700; cursor:pointer; }
+    button.secondary { background:#fff; color:var(--accent); }
+    .token { background:#e8f5e9; border:1px solid #a5d6a7; border-radius:8px; padding:12px; margin-bottom:16px; }
+    .message { border-radius:8px; padding:10px 12px; margin-bottom:16px; font-size:13px; }
+    .message.ok { background:#e8f5e9; border:1px solid #a5d6a7; color:var(--ok); }
+    .message.err { background:#fdecea; border:1px solid #f3b5ad; color:var(--err); }
+    code { display:block; margin-top:6px; padding:9px; background:#fff; border:1px solid #a5d6a7; border-radius:6px; overflow:auto; font-family:Consolas,"Courier New",monospace; font-size:12px; }
+    table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    th, td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:13px; }
+    th { color:var(--muted); font-size:12px; text-transform:uppercase; background:#f8fafc; }
+    tr:last-child td { border-bottom:0; }
+    .status { display:inline-block; border-radius:999px; padding:3px 8px; font-size:12px; font-weight:700; }
+    .active { color:var(--ok); background:#e8f5e9; }
+    .disabled { color:var(--err); background:#fdecea; }
+    .expired { color:var(--warn); background:#fff4d6; }
+    .muted { color:var(--muted); }
+    .num { font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .path { max-width:260px; word-break:break-all; }
+    @media (max-width:820px) { .shell { padding:16px; } .grid { grid-template-columns:1fr; } table { display:block; overflow:auto; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div>
+        <h1>Admin cabinet</h1>
+        <p class="sub">Logged in as {{ admin_username }}. Manage service clients and token usage.</p>
+      </div>
+      <form method="post" action="/services/word-constructor/admin/logout"><button class="secondary" type="submit">Log out</button></form>
+    </div>
+
+    {% if new_token %}
+      <div class="token">
+        New token. Store it now; it is not shown again.
+        <code>{{ new_token }}</code>
+      </div>
+    {% endif %}
+
+    {% if password_message %}<div class="message ok">{{ password_message }}</div>{% endif %}
+    {% if password_error %}<div class="message err">{{ password_error }}</div>{% endif %}
+
+    <section class="panel">
+      <form class="grid" method="post" action="/services/word-constructor/admin/password">
+        <div>
+          <label for="current_password">Current password</label>
+          <input id="current_password" name="current_password" type="password" autocomplete="current-password" required>
+        </div>
+        <div>
+          <label for="new_password">New password</label>
+          <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="8" required>
+        </div>
+        <div>
+          <label for="confirm_password">Confirm</label>
+          <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" required>
+        </div>
+        <button type="submit">Change password</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <form class="grid" method="post" action="/services/word-constructor/admin/clients">
+        <div>
+          <label for="name">Client name</label>
+          <input id="name" name="name" placeholder="1C production" required>
+        </div>
+        <div>
+          <label for="expires_at">Expires at</label>
+          <input id="expires_at" name="expires_at" type="datetime-local">
+        </div>
+        <button type="submit">Create token</button>
+      </form>
+    </section>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Status</th>
+          <th>Calls</th>
+          <th>Input</th>
+          <th>Output</th>
+          <th>Last call</th>
+          <th>Last path</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for client in clients %}
+        <tr>
+          <td><strong>{{ client.name }}</strong><br><span class="muted">{{ client.id }}</span></td>
+          <td>
+            {% if client.expired %}<span class="status expired">Expired</span>
+            {% elif client.active %}<span class="status active">Active</span>
+            {% else %}<span class="status disabled">Disabled</span>{% endif %}
+            <br><span class="muted">{{ client.expires_at or "No expiration" }}</span>
+          </td>
+          <td class="num">{{ client.stats.calls }}</td>
+          <td class="num">{{ client.stats.input_bytes }} B</td>
+          <td class="num">{{ client.stats.output_bytes }} B</td>
+          <td class="num">{{ client.stats.last_call_at or "-" }}</td>
+          <td class="path muted">{{ client.stats.last_path or "-" }}</td>
+          <td><form method="post" action="/services/word-constructor/admin/clients/{{ client.id }}/toggle"><button class="secondary" type="submit">{{ "Disable" if client.active else "Enable" }}</button></form></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="muted">No clients yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

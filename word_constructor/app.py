@@ -21,7 +21,10 @@ def _safe_b64decode(value: str) -> bytes:
     s += "=" * (-len(s) % 4)        # fix padding
     return base64.b64decode(s)
 import copy
+import hashlib
+import hmac
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -38,7 +41,7 @@ from urllib.request import Request, urlopen
 
 import jwt
 from docx import Document
-from flask import Blueprint, abort, jsonify, redirect, render_template, request, send_file
+from flask import Blueprint, abort, g, jsonify, redirect, render_template, request, send_file, session
 
 from word_constructor.transforms import apply_transform, get_transforms
 
@@ -50,6 +53,8 @@ word_constructor = Blueprint(
 
 STORAGE_DIR = Path("/tmp/kazuni_word_constructor")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+CLIENT_STORE_PATH = Path(os.environ.get("CLIENT_STORE_PATH", "/tmp/kazuni_word_constructor_clients.json"))
+_CLIENT_STORE_LOCK = threading.Lock()
 DEFAULT_SESSION_TTL_SECONDS = 35 * 60
 SESSION_TTL_SECONDS = max(
     int(os.environ.get("SESSION_TTL_SECONDS", str(DEFAULT_SESSION_TTL_SECONDS))),
@@ -101,6 +106,213 @@ def _resolve_table_cell(key: str, table_params: dict) -> str | None:
             return str(rows[r][c]) if r < len(rows) and c < len(rows[r]) else ""
     except (ValueError, IndexError):
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Admin clients and token auth
+# ---------------------------------------------------------------------------
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _empty_client_store() -> dict[str, Any]:
+    return {"clients": [], "admin": {}}
+
+
+def _read_client_store() -> dict[str, Any]:
+    if not CLIENT_STORE_PATH.exists():
+        return _empty_client_store()
+    try:
+        raw = json.loads(CLIENT_STORE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return _empty_client_store()
+    if not isinstance(raw, dict) or not isinstance(raw.get("clients"), list):
+        return _empty_client_store()
+    if not isinstance(raw.get("admin"), dict):
+        raw["admin"] = {}
+    return raw
+
+
+def _write_client_store(store: dict[str, Any]) -> None:
+    CLIENT_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CLIENT_STORE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(CLIENT_STORE_PATH)
+
+
+def _parse_admin_expires(value: str) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _client_is_expired(client: dict[str, Any], now: datetime | None = None) -> bool:
+    expires_at = _parse_iso(client.get("expires_at"))
+    if expires_at is None:
+        return False
+    return (now or datetime.now(timezone.utc)) > expires_at
+
+
+def _client_public(client: dict[str, Any]) -> dict[str, Any]:
+    stats = client.get("stats") if isinstance(client.get("stats"), dict) else {}
+    return {
+        "id": client.get("id", ""),
+        "name": client.get("name", ""),
+        "created_at": client.get("created_at", ""),
+        "expires_at": client.get("expires_at"),
+        "active": bool(client.get("active", True)),
+        "expired": _client_is_expired(client),
+        "stats": {
+            "calls": int(stats.get("calls", 0) or 0),
+            "input_bytes": int(stats.get("input_bytes", 0) or 0),
+            "output_bytes": int(stats.get("output_bytes", 0) or 0),
+            "last_call_at": stats.get("last_call_at"),
+            "last_path": stats.get("last_path"),
+        },
+    }
+
+
+def _extract_bearer_token() -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth.split(None, 1)[1].strip()
+    return (request.headers.get("X-Client-Token") or request.args.get("token") or "").strip()
+
+
+def _find_client_by_token(token: str) -> dict[str, Any] | None:
+    if not token:
+        return None
+    token_hash = _hash_token(token)
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        for client in store["clients"]:
+            stored_hash = str(client.get("token_hash", ""))
+            if stored_hash and hmac.compare_digest(stored_hash, token_hash):
+                return client
+    return None
+
+
+def _authenticate_api_client() -> tuple[dict[str, Any] | None, tuple[Any, int] | None]:
+    client = _find_client_by_token(_extract_bearer_token())
+    if client is None:
+        return None, (jsonify({"error": "Missing or invalid client token"}), 401)
+    if not client.get("active", True):
+        return None, (jsonify({"error": "Client token is disabled"}), 403)
+    if _client_is_expired(client):
+        return None, (jsonify({"error": "Client token expired"}), 403)
+    return client, None
+
+
+def _session_client_id_from_path(path: str) -> str | None:
+    m = re.match(r"^/services/word-constructor/api/template-builder/([^/]+)/(?:status|download)$", path)
+    if not m:
+        return None
+    meta = _read_meta(m.group(1))
+    if not meta or meta.get("type") != "template_builder":
+        return None
+    return meta.get("client_id")
+
+
+def _client_api_needs_token(path: str) -> bool:
+    if path.startswith("/services/word-constructor/api/1c/"):
+        return True
+    return _session_client_id_from_path(path) is not None
+
+
+def _record_client_usage(client_id: str, response) -> None:
+    in_bytes = int(request.content_length or 0)
+    out_bytes = response.calculate_content_length()
+    out_bytes = int(out_bytes or 0)
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        for client in store["clients"]:
+            if client.get("id") != client_id:
+                continue
+            stats = client.setdefault("stats", {})
+            stats["calls"] = int(stats.get("calls", 0) or 0) + 1
+            stats["input_bytes"] = int(stats.get("input_bytes", 0) or 0) + in_bytes
+            stats["output_bytes"] = int(stats.get("output_bytes", 0) or 0) + out_bytes
+            stats["last_call_at"] = _utc_now_iso()
+            stats["last_path"] = request.path
+            _write_client_store(store)
+            break
+
+
+def _admin_logged_in() -> bool:
+    return session.get("admin_logged_in") is True
+
+
+def _admin_credentials_ok(username: str, password: str) -> bool:
+    expected_user = os.environ.get("ADMIN_USERNAME", "admin")
+    if not hmac.compare_digest(username, expected_user):
+        return False
+
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        stored_hash = str(store.get("admin", {}).get("password_hash", "") or "")
+
+    if stored_hash:
+        return hmac.compare_digest(stored_hash, _hash_token(password))
+
+    expected_pass = os.environ.get("ADMIN_PASSWORD", "admin")
+    return hmac.compare_digest(password, expected_pass)
+
+
+def _set_admin_password(password: str) -> None:
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        admin = store.setdefault("admin", {})
+        admin["password_hash"] = _hash_token(password)
+        admin["password_changed_at"] = _utc_now_iso()
+        _write_client_store(store)
+
+
+@word_constructor.before_request
+def require_client_token():
+    path = request.path
+    if path.startswith("/services/word-constructor/admin"):
+        return None
+    if not _client_api_needs_token(path):
+        return None
+
+    client, error = _authenticate_api_client()
+    if error is not None:
+        return error
+    required_client_id = _session_client_id_from_path(path)
+    if required_client_id and client and client.get("id") != required_client_id:
+        return jsonify({"error": "Token is not allowed for this session"}), 403
+    g.api_client_id = client.get("id") if client else None
+    g.api_client_name = client.get("name") if client else None
+    return None
+
+
+@word_constructor.after_request
+def record_client_stats(response):
+    client_id = getattr(g, "api_client_id", None)
+    if client_id:
+        _record_client_usage(client_id, response)
+    return response
 
 # ---------------------------------------------------------------------------
 # Session helpers
@@ -721,8 +933,133 @@ def fill_docx(
 # Routes
 # ---------------------------------------------------------------------------
 
+
+@word_constructor.get("/admin")
+def admin_index():
+    if _admin_logged_in():
+        return redirect("/services/word-constructor/admin/cabinet")
+    return redirect("/services/word-constructor/admin/login")
+
+
+@word_constructor.get("/admin/login")
+def admin_login_page():
+    return render_template("word_constructor/admin_login.html", error="")
+
+
+@word_constructor.post("/admin/login")
+def admin_login():
+    username = request.form.get("username", "")
+    password = request.form.get("password", "")
+    if not _admin_credentials_ok(username, password):
+        return render_template("word_constructor/admin_login.html", error="Invalid username or password"), 401
+    session["admin_logged_in"] = True
+    return redirect("/services/word-constructor/admin/cabinet")
+
+
+@word_constructor.post("/admin/logout")
+def admin_logout():
+    session.pop("admin_logged_in", None)
+    return redirect("/services/word-constructor/admin/login")
+
+
+@word_constructor.get("/admin/cabinet")
+def admin_cabinet():
+    if not _admin_logged_in():
+        return redirect("/services/word-constructor/admin/login")
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        clients = [_client_public(client) for client in store["clients"]]
+    clients.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+    new_token = session.pop("new_client_token", None)
+    password_message = session.pop("password_message", "")
+    password_error = session.pop("password_error", "")
+    return render_template(
+        "word_constructor/admin_cabinet.html",
+        clients=clients,
+        new_token=new_token,
+        admin_username=os.environ.get("ADMIN_USERNAME", "admin"),
+        password_message=password_message,
+        password_error=password_error,
+    )
+
+
+@word_constructor.post("/admin/password")
+def admin_change_password():
+    if not _admin_logged_in():
+        return redirect("/services/word-constructor/admin/login")
+
+    current_password = request.form.get("current_password", "")
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+    username = os.environ.get("ADMIN_USERNAME", "admin")
+
+    if not _admin_credentials_ok(username, current_password):
+        session["password_error"] = "Current password is incorrect"
+    elif len(new_password) < 8:
+        session["password_error"] = "New password must be at least 8 characters"
+    elif new_password != confirm_password:
+        session["password_error"] = "New passwords do not match"
+    else:
+        _set_admin_password(new_password)
+        session["password_message"] = "Admin password changed"
+
+    return redirect("/services/word-constructor/admin/cabinet")
+
+
+@word_constructor.post("/admin/clients")
+def admin_create_client():
+    if not _admin_logged_in():
+        return redirect("/services/word-constructor/admin/login")
+    name = (request.form.get("name") or "").strip()
+    if not name:
+        name = "Service client"
+    try:
+        expires_at = _parse_admin_expires(request.form.get("expires_at", ""))
+    except ValueError:
+        expires_at = None
+
+    token = "wc_" + secrets.token_urlsafe(32)
+    client = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "token_hash": _hash_token(token),
+        "created_at": _utc_now_iso(),
+        "expires_at": expires_at,
+        "active": True,
+        "stats": {
+            "calls": 0,
+            "input_bytes": 0,
+            "output_bytes": 0,
+            "last_call_at": None,
+            "last_path": None,
+        },
+    }
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        store["clients"].append(client)
+        _write_client_store(store)
+    session["new_client_token"] = token
+    return redirect("/services/word-constructor/admin/cabinet")
+
+
+@word_constructor.post("/admin/clients/<client_id>/toggle")
+def admin_toggle_client(client_id: str):
+    if not _admin_logged_in():
+        return redirect("/services/word-constructor/admin/login")
+    with _CLIENT_STORE_LOCK:
+        store = _read_client_store()
+        for client in store["clients"]:
+            if client.get("id") == client_id:
+                client["active"] = not bool(client.get("active", True))
+                break
+        _write_client_store(store)
+    return redirect("/services/word-constructor/admin/cabinet")
+
+
 @word_constructor.get("/")
 def index():
+    if not _admin_logged_in():
+        return redirect("/services/word-constructor/admin/login")
     return render_template("word_constructor/index.html")
 
 
@@ -1414,6 +1751,8 @@ def api_1c_documents_bridge():
         "expires_at": expires_at,
         "expires_at_iso": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
     }
+    if getattr(g, "api_client_id", None):
+        meta["client_id"] = g.api_client_id
     _write_meta(session_id, meta)
     _session_template_path(session_id).write_bytes(template_bytes or _build_template_docx([]))
 
@@ -2348,6 +2687,8 @@ def _create_onlyoffice_edit_session(filename: str, document_bytes: bytes, params
         "expires_at": expires_at,
         "expires_at_iso": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
     }
+    if getattr(g, "api_client_id", None):
+        meta["client_id"] = g.api_client_id
     _write_meta(session_id, meta)
     _session_template_path(session_id).write_bytes(document_bytes)
     return meta
