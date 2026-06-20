@@ -379,7 +379,7 @@ def _page_html(request_id: str, expired: bool = False) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Подписание документа</title>
+  <title>KazUni Подписание документа</title>
   <style>
     :root {{
       color-scheme: light;
@@ -423,10 +423,11 @@ def _page_html(request_id: str, expired: bool = False) -> str:
     .error {{ color: #b42318; }}
     .ok {{ color: #047857; }}
   </style>
+  <script src="/static/ncalayer-client.js"></script>
 </head>
 <body>
   <main>
-    <h1>Подписание документа</h1>
+    <h1>KazUni Подписание документа</h1>
     <dl>
       <dt>Файл</dt><dd id="filename">...</dd>
       <dt>Тип</dt><dd id="doctype">...</dd>
@@ -472,94 +473,68 @@ def _page_html(request_id: str, expired: bool = False) -> str:
       }}
     }}
 
-    function connectNCALayer() {{
-      const urls = [
-        "wss://127.0.0.1:13579/",
-        "wss://localhost:13579/",
-        "ws://127.0.0.1:13579/",
-        "ws://localhost:13579/"
-      ];
-      return new Promise((resolve, reject) => {{
-        let index = 0;
-        let lastError = null;
-        function tryNext() {{
-          if (index >= urls.length) {{
-            reject(lastError || new Error("NCALayer недоступен"));
-            return;
-          }}
-          const ws = new WebSocket(urls[index++]);
-          const timer = setTimeout(() => {{
-            try {{ ws.close(); }} catch (e) {{}}
-            tryNext();
-          }}, 1500);
-          ws.onopen = () => {{
-            clearTimeout(timer);
-            resolve(ws);
-          }};
-          ws.onerror = () => {{
-            clearTimeout(timer);
-            lastError = new Error("Не удалось подключиться к NCALayer");
-            tryNext();
-          }};
-        }}
-        tryNext();
-      }});
+    function decodeBase64Utf8(value) {{
+      const binary = atob(value || "");
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder("utf-8").decode(bytes);
     }}
 
-    function ncaCall(ws, method, args) {{
-      return new Promise((resolve, reject) => {{
-        ws.onmessage = (event) => {{
-          let response;
-          try {{ response = JSON.parse(event.data); }} catch (e) {{ reject(e); return; }}
-          if (response.code && response.code !== "200") {{
-            reject(new Error(response.message || response.responseObject || "Ошибка NCALayer"));
-            return;
-          }}
-          if (response.status && response.status !== true && response.status !== "true") {{
-            reject(new Error(response.message || "Операция NCALayer не выполнена"));
-            return;
-          }}
-          resolve(response.responseObject || response.result || response.data || response);
-        }};
-        ws.onerror = () => reject(new Error("Соединение с NCALayer прервано"));
-        ws.send(JSON.stringify({{
-          module: "kz.gov.pki.knca.commonUtils",
-          method,
-          args
-        }}));
-      }});
+    function closeNCALayer(client) {{
+      try {{
+        if (client && client.wsConnection) client.wsConnection.close();
+      }} catch (e) {{}}
+    }}
+
+    async function connectNCALayerClient() {{
+      if (typeof NCALayerClient === "undefined") {{
+        throw new Error("NCALayer JS клиент не загружен");
+      }}
+      const client = new NCALayerClient(undefined, false);
+      try {{
+        await client.connect(true);
+      }} catch (error) {{
+        throw new Error("Не удалось подключиться к NCALayer: " + (error.message || error.toString()));
+      }}
+      return client;
     }}
 
     async function signWithNCALayer(payload) {{
-      const ws = await connectNCALayer();
+      const client = await connectNCALayerClient();
       try {{
         if (payload.document_type === "xml") {{
-          const signedXml = await ncaCall(ws, "signXml", [
-            "PKCS12",
-            "SIGNATURE",
-            payload.document_text || atob(payload.document_base64),
-            "",
-            ""
-          ]);
+          const xml = payload.document_text || decodeBase64Utf8(payload.document_base64);
+          const signedXml = await client.basicsSignXML(
+            NCALayerClient.basicsStorageAll,
+            xml,
+            NCALayerClient.basicsXMLParams,
+            NCALayerClient.basicsSignerSignAny,
+            "ru"
+          );
           return {{
             signed_document: String(signedXml),
             signed_filename: (payload.filename || "document.xml").replace(/\\.xml$/i, "") + "-signed.xml",
             signed_content_type: "application/xml"
           }};
         }}
-        const cms = await ncaCall(ws, "createCAdESFromBase64", [
-          "PKCS12",
+        const cms = await client.basicsSignCMS(
+          NCALayerClient.basicsStorageAll,
           payload.document_base64,
-          "SIGNATURE",
-          false
-        ]);
+          NCALayerClient.basicsCMSParamsDetached,
+          NCALayerClient.basicsSignerSignAny,
+          "ru"
+        );
         return {{
           signed_document_base64: String(cms),
           signed_filename: (payload.filename || "document.pdf").replace(/\\.pdf$/i, "") + ".p7s",
           signed_content_type: "application/pkcs7-signature"
         }};
+      }} catch (error) {{
+        if (error && error.canceledByUser) {{
+          throw new Error("Действие отменено пользователем.");
+        }}
+        throw error;
       }} finally {{
-        try {{ ws.close(); }} catch (e) {{}}
+        closeNCALayer(client);
       }}
     }}
 
