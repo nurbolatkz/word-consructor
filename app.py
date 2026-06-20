@@ -7,8 +7,12 @@ import os
 from flask import Flask, jsonify, redirect, request
 from flask_sock import Sock
 
+from sign_document import sign_document
+
 from word_constructor.app import (
+    client_api_index_response,
     public_base_url,
+    request_has_client_token,
     _TB_DL_TIMEOUT,
     _TB_WS_TIMEOUT,
     _is_expired,
@@ -19,8 +23,21 @@ from word_constructor.app import (
 )
 
 
+class NormalizeLeadingSlashesMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path.startswith("//"):
+            environ["PATH_INFO"] = "/" + path.lstrip("/")
+        return self.app(environ, start_response)
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.url_map.strict_slashes = False
+    app.wsgi_app = NormalizeLeadingSlashesMiddleware(app.wsgi_app)
     app.secret_key = os.environ.get("ADMIN_SESSION_SECRET", os.environ.get("SECRET_KEY", "dev-admin-session-secret"))
     app.config["MAX_CONTENT_LENGTH"] = int(
         os.environ.get("MAX_CONTENT_LENGTH", str(32 * 1024 * 1024))
@@ -28,10 +45,13 @@ def create_app() -> Flask:
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
 
     app.register_blueprint(word_constructor, url_prefix="/services/word-constructor")
+    app.register_blueprint(sign_document, url_prefix="/sign_document")
     sock = Sock(app)
 
     @app.get("/")
     def index():
+        if request_has_client_token():
+            return client_api_index_response()
         return redirect("/services/word-constructor/")
 
     @app.get("/health")

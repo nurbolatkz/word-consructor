@@ -105,3 +105,33 @@ Authorization: Bearer <token>
 `X-Client-Token: <token>` is also accepted. Tokens can have an expiration time; expired or disabled clients receive `403`. The cabinet tracks total calls, request bytes, response bytes, last call time, and last called path.
 
 Protected client endpoints include `/services/word-constructor/api/1c/...`. Template-builder status and download URLs created by a token-authenticated 1C bridge request also require a valid token from the same client.
+
+## NCALayer document signing bridge
+
+Create a signing request from 1C/API clients:
+
+```text
+POST /sign_document/api/1c/requests
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "filename": "ticket.xml",
+  "document_type": "xml",
+  "document_base64": "...",
+  "description": "ЭСФ auth ticket"
+}
+```
+
+`document_type` supports `xml` and `pdf`. The response contains `sign_url`, `status_url`, and `result_url`. Open `sign_url` in the user browser; the page connects to local NCALayer, signs the document, and sends the signed result back to this service.
+
+Poll from 1C:
+
+```text
+GET /sign_document/api/1c/requests/<id>/status
+GET /sign_document/api/1c/requests/<id>/result
+```
+
+Before signing, `result` returns HTTP `202`. After signing it returns JSON with `signed_document_base64`. For XML, this is the signed XML encoded as UTF-8/base64. For PDF, NCALayer returns a CAdES/PKCS#7 signature (`.p7s`) encoded as base64.

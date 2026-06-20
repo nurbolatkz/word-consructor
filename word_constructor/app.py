@@ -200,6 +200,33 @@ def _extract_bearer_token() -> str:
     return (request.headers.get("X-Client-Token") or request.args.get("token") or "").strip()
 
 
+def request_has_client_token() -> bool:
+    return bool(_extract_bearer_token())
+
+
+def client_api_index_response():
+    client, error = _authenticate_api_client()
+    if error is not None:
+        return error
+    g.api_client_id = client.get("id") if client else None
+    g.api_client_name = client.get("name") if client else None
+    return jsonify({
+        "status": "ok",
+        "service": "word-constructor",
+        "client": {
+            "id": client.get("id", "") if client else "",
+            "name": client.get("name", "") if client else "",
+        },
+        "endpoints": {
+            "replace": "/services/word-constructor/api/1c/replace",
+            "replace_edit": "/services/word-constructor/api/1c/replace-edit",
+            "template_builder_bridge": "/services/word-constructor/api/1c/template-builder/bridge",
+            "word_base64_to_pdf": "/services/word-constructor/api/1c/converter/word-base64-to-pdf/",
+            "sign_document": "/sign_document/api/1c/requests",
+        },
+    })
+
+
 def _find_client_by_token(token: str) -> dict[str, Any] | None:
     if not token:
         return None
@@ -454,7 +481,14 @@ def _onlyoffice_command_urls(key: str) -> list[str]:
     ]
 
 
-def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _onlyoffice_converter_urls() -> list[str]:
+    base = _onlyoffice_service_base_url()
+    return [
+        f"{base}/ConvertService.ashx",
+    ]
+
+
+def _post_json(url: str, payload: dict[str, Any], timeout: int = 20) -> dict[str, Any]:
     req = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -465,9 +499,68 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
         },
         method="POST",
     )
-    with urlopen(req, timeout=20) as response:
+    with urlopen(req, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw or "{}")
+
+
+def _converter_source_path(conversion_id: str) -> Path:
+    return _session_dir(conversion_id) / "source.docx"
+
+
+def _converter_internal_url(conversion_id: str) -> str:
+    return (
+        f"{_onlyoffice_internal_base_url()}/services/word-constructor/"
+        f"api/converter/{conversion_id}/source"
+    )
+
+
+def _convert_docx_to_pdf_with_onlyoffice(filename: str, document_bytes: bytes) -> bytes:
+    conversion_id = str(uuid.uuid4())
+    sdir = _session_dir(conversion_id)
+    sdir.mkdir(parents=True, exist_ok=True)
+    expires_at = time.time() + 5 * 60
+    meta = {
+        "id": conversion_id,
+        "type": "conversion",
+        "filename": filename,
+        "expires_at": expires_at,
+        "expires_at_iso": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+    }
+    _write_meta(conversion_id, meta)
+    _converter_source_path(conversion_id).write_bytes(document_bytes)
+
+    key = hashlib.sha256(document_bytes + conversion_id.encode("utf-8")).hexdigest()
+    payload = {
+        "async": False,
+        "filetype": "docx",
+        "key": key,
+        "outputtype": "pdf",
+        "title": filename,
+        "url": _converter_internal_url(conversion_id),
+    }
+    payload["token"] = jwt.encode(payload, _onlyoffice_jwt_secret(), algorithm="HS256")
+
+    last_error: Exception | None = None
+    try:
+        for url in _onlyoffice_converter_urls():
+            try:
+                result = _post_json(url, payload, timeout=60)
+            except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+                last_error = exc
+                continue
+
+            error_code = int(result.get("error", 0) or 0)
+            if error_code != 0:
+                raise RuntimeError(f"ONLYOFFICE conversion failed with error {error_code}: {result}")
+            file_url = result.get("fileUrl") or result.get("fileurl")
+            if not file_url:
+                raise RuntimeError(f"ONLYOFFICE conversion response has no fileUrl: {result}")
+            download_url, host_header = _normalize_callback_download_url(str(file_url))
+            return _download_remote_file(download_url, host_header)
+        raise RuntimeError(f"Cannot reach ONLYOFFICE conversion service: {last_error}")
+    finally:
+        shutil.rmtree(sdir, ignore_errors=True)
 
 
 def _builder_editor_key(session_id: str, path: Path) -> str:
@@ -1058,6 +1151,8 @@ def admin_toggle_client(client_id: str):
 
 @word_constructor.get("/")
 def index():
+    if request_has_client_token():
+        return client_api_index_response()
     if not _admin_logged_in():
         return redirect("/services/word-constructor/admin/login")
     return render_template("word_constructor/index.html")
@@ -1657,6 +1752,75 @@ def api_template_builder_download(session_id: str):
         as_attachment=True,
         download_name=filename,
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
+@word_constructor.get("/api/converter/<conversion_id>/source")
+def api_converter_source(conversion_id: str):
+    meta = _read_meta(conversion_id)
+    if meta is None or meta.get("type") != "conversion":
+        abort(404)
+    if _is_expired(meta):
+        shutil.rmtree(_session_dir(conversion_id), ignore_errors=True)
+        abort(410)
+
+    path = _converter_source_path(conversion_id)
+    if not path.exists():
+        abort(404)
+
+    return _send_file_compat(
+        path,
+        as_attachment=False,
+        download_name=meta.get("filename", "document.docx"),
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
+@word_constructor.post("/api/1c/converter/word-base64-to-pdf/")
+@word_constructor.post("/api/1c/converter/word-base64-to-pdf")
+def api_1c_word_base64_to_pdf():
+    """
+    Convert a base64-encoded .docx payload from 1C to PDF.
+
+    Request JSON:
+      {"filename": "template.docx", "content_base64": "..."}
+
+    Response: raw PDF bytes with application/pdf content type.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Expected JSON body"}), 400
+
+    filename = str(payload.get("filename") or "document.docx")
+    content_base64 = payload.get("content_base64")
+    if not isinstance(content_base64, str) or not content_base64.strip():
+        return jsonify({"error": "Missing 'content_base64'"}), 400
+    if Path(filename).suffix.lower() != ".docx":
+        return jsonify({"error": "Only .docx files can be converted to PDF"}), 400
+
+    try:
+        document_bytes = _safe_b64decode(content_base64)
+    except Exception as exc:
+        return jsonify({"error": f"Invalid base64 document: {exc}"}), 400
+    if not document_bytes:
+        return jsonify({"error": "Decoded document is empty"}), 400
+
+    try:
+        Document(BytesIO(document_bytes))
+    except Exception:
+        return jsonify({"error": "Cannot read content_base64 as a .docx file"}), 400
+
+    try:
+        pdf_bytes = _convert_docx_to_pdf_with_onlyoffice(filename, document_bytes)
+    except Exception as exc:
+        return jsonify({"error": f"Cannot convert document to PDF: {exc}"}), 502
+
+    pdf_name = f"{Path(filename).stem or 'document'}.pdf"
+    return _send_file_compat(
+        BytesIO(pdf_bytes),
+        as_attachment=True,
+        download_name=pdf_name,
+        mimetype="application/pdf",
     )
 
 

@@ -13,6 +13,10 @@ services:
       MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-33554432}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-2100}
       TEMPLATE_BUILDER_SESSION_TTL_SECONDS: ${TEMPLATE_BUILDER_SESSION_TTL_SECONDS:-2100}
+      SIGN_DOCUMENT_SESSION_TTL_SECONDS: ${SIGN_DOCUMENT_SESSION_TTL_SECONDS:-2100}
+      SIGN_DOCUMENT_MAX_BYTES: ${SIGN_DOCUMENT_MAX_BYTES:-20971520}
+      SIGN_DOCUMENT_STORAGE_DIR: ${SIGN_DOCUMENT_STORAGE_DIR:-/tmp/kazuni_word_constructor/sign_document}
+      CLIENT_STORE_PATH: ${CLIENT_STORE_PATH:-/tmp/kazuni_word_constructor/clients.json}
     volumes:
       - word_constructor_tmp:/tmp/kazuni_word_constructor
     depends_on:
