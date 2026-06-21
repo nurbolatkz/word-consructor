@@ -17,6 +17,12 @@ services:
       SIGN_DOCUMENT_MAX_BYTES: ${SIGN_DOCUMENT_MAX_BYTES:-20971520}
       SIGN_DOCUMENT_STORAGE_DIR: ${SIGN_DOCUMENT_STORAGE_DIR:-/tmp/kazuni_word_constructor/sign_document}
       CLIENT_STORE_PATH: ${CLIENT_STORE_PATH:-/tmp/kazuni_word_constructor/clients.json}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_PLACEHOLDER_MODEL: ${OPENAI_PLACEHOLDER_MODEL:-gpt-4o-mini}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_PLACEHOLDER_TIMEOUT_SECONDS: ${OPENAI_PLACEHOLDER_TIMEOUT_SECONDS:-8}
+      AI_PLACEHOLDER_CONTEXT_CHARS: ${AI_PLACEHOLDER_CONTEXT_CHARS:-240}
+      AI_PLACEHOLDER_MAX_SNIPPETS: ${AI_PLACEHOLDER_MAX_SNIPPETS:-5}
     volumes:
       - word_constructor_tmp:/tmp/kazuni_word_constructor
     depends_on:

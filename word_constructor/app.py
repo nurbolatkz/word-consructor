@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 
 
@@ -45,6 +46,8 @@ from flask import Blueprint, abort, g, jsonify, redirect, render_template, reque
 
 from word_constructor.transforms import apply_transform, get_transforms
 
+logger = logging.getLogger(__name__)
+
 word_constructor = Blueprint(
     "word_constructor",
     __name__,
@@ -70,6 +73,19 @@ FORCESAVE_WAIT_SECONDS = 8.0
 # and [Key] (native 1C format).
 # Group 1 = curly-brace key (may contain dots), Group 2 = square-bracket key.
 _PLACEHOLDER_RE = re.compile(r"\{\{([^{}\n\r]{1,120})\}\}|\[([^\[\]\n\r]{1,120})\]")
+AI_PLACEHOLDER_CONTEXT_CHARS = max(
+    int(os.environ.get("AI_PLACEHOLDER_CONTEXT_CHARS", "240")),
+    40,
+)
+AI_PLACEHOLDER_MAX_SNIPPETS = max(
+    int(os.environ.get("AI_PLACEHOLDER_MAX_SNIPPETS", "5")),
+    1,
+)
+OPENAI_PLACEHOLDER_TIMEOUT_SECONDS = max(
+    float(os.environ.get("OPENAI_PLACEHOLDER_TIMEOUT_SECONDS", "8")),
+    1.0,
+)
+
 
 
 def _match_key(m: re.Match) -> str:
@@ -641,6 +657,184 @@ def _extract_placeholder_keys(doc: Document) -> list[str]:
                     for m in _PLACEHOLDER_RE.finditer(_para_full_text(para)):
                         keys.add(_match_key(m))
     return sorted(keys)
+
+
+def _truthy_request_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _parse_ai_replace_options() -> tuple[bool, str]:
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        use_ai = _truthy_request_value(payload.get("UseAI", payload.get("use_ai", False)))
+        prompt = str(payload.get("PromtAI", payload.get("PromptAI", payload.get("prompt_ai", ""))) or "")
+        return use_ai, prompt
+    use_ai = _truthy_request_value(request.form.get("UseAI") or request.form.get("use_ai"))
+    prompt = request.form.get("PromtAI") or request.form.get("PromptAI") or request.form.get("prompt_ai") or ""
+    return use_ai, str(prompt)
+
+
+def _raw_ai_placeholder_values(slot_values: dict[str, str]) -> dict[str, Any]:
+    try:
+        if request.is_json:
+            payload = request.get_json(silent=True) or {}
+            parsed = payload.get("params", payload.get("placeholders", payload.get("values", {})))
+        else:
+            raw = request.form.get("params") or request.form.get("placeholders") or "{}"
+            parsed = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return dict(slot_values)
+
+    if not isinstance(parsed, dict):
+        return dict(slot_values)
+    scalar_keys = set(slot_values)
+    return {str(key): value for key, value in parsed.items() if str(key) in scalar_keys}
+
+
+def _placeholder_context_snippet(text: str, match: re.Match, window: int) -> str:
+    start = max(0, match.start() - window)
+    end = min(len(text), match.end() + window)
+    snippet = text[start:end]
+    snippet = re.sub(r"\s+", " ", snippet).strip()
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(text):
+        snippet = snippet + "..."
+    return snippet
+
+
+def _iter_docx_text_blocks(doc: Document):
+    for para in doc.paragraphs:
+        yield _para_full_text(para)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    yield _para_full_text(para)
+
+
+def _extract_placeholder_contexts(doc: Document, slot_values: dict[str, str]) -> dict[str, list[str]]:
+    contexts: dict[str, list[str]] = {key: [] for key in slot_values}
+    if not slot_values:
+        return contexts
+
+    wanted = set(slot_values)
+    for text in _iter_docx_text_blocks(doc):
+        if not text:
+            continue
+        for match in _PLACEHOLDER_RE.finditer(text):
+            key = _match_key(match)
+            if key not in wanted:
+                continue
+            snippets = contexts.setdefault(key, [])
+            if len(snippets) >= AI_PLACEHOLDER_MAX_SNIPPETS:
+                continue
+            snippet = _placeholder_context_snippet(text, match, AI_PLACEHOLDER_CONTEXT_CHARS)
+            if snippet and snippet not in snippets:
+                snippets.append(snippet)
+    return contexts
+
+
+def _openai_placeholder_payload(slot_values: dict[str, Any], contexts: dict[str, list[str]], prompt_ai: str) -> dict[str, Any]:
+    user_payload = {
+        "placeholders": slot_values,
+        "placeholder_contexts": contexts,
+        "additional_user_guidance": prompt_ai or "",
+    }
+    system_prompt = (
+        "You correct placeholder values before they are inserted into a Word document. "
+        "Use the surrounding document snippets to judge grammar, case/declension, date format, "
+        "semantic fit, and consistency. Return ONLY corrected values for the same placeholder keys. "
+        "Do not gratuitously rewrite already-correct values. Preserve each value's original meaning and intent; "
+        "only fix language, formatting, or correctness issues. Return strict JSON with exactly the same keys as "
+        "the input placeholders map and string values only. No commentary and no markdown fences."
+    )
+    return {
+        "model": os.environ.get("OPENAI_PLACEHOLDER_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0,
+    }
+
+
+def _parse_openai_chat_content(raw_response: bytes) -> str:
+    payload = json.loads(raw_response.decode("utf-8"))
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("OpenAI response has no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        if parts:
+            return "".join(parts)
+    raise ValueError("OpenAI response content is empty")
+
+
+def _request_ai_placeholder_corrections(slot_values: dict[str, Any], contexts: dict[str, list[str]], prompt_ai: str) -> dict[str, str]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        logger.warning("UseAI requested for replace-edit, but OPENAI_API_KEY is not configured")
+        return {}
+
+    body = json.dumps(_openai_placeholder_payload(slot_values, contexts, prompt_ai), ensure_ascii=False).encode("utf-8")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    req = Request(
+        f"{base_url}/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(req, timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS) as resp:
+        content = _parse_openai_chat_content(resp.read())
+
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("OpenAI correction payload is not a JSON object")
+    allowed = set(slot_values)
+    corrections: dict[str, str] = {}
+    for key, value in parsed.items():
+        if key in allowed and value is not None:
+            corrections[str(key)] = str(value)
+    return corrections
+
+
+def _ai_correct_slot_values(doc: Document, slot_values: dict[str, str], prompt_ai: str) -> dict[str, str]:
+    if not slot_values:
+        return slot_values
+    try:
+        contexts = _extract_placeholder_contexts(doc, slot_values)
+        ai_values = _raw_ai_placeholder_values(slot_values)
+        corrections = _request_ai_placeholder_corrections(ai_values, contexts, prompt_ai)
+    except Exception as exc:
+        logger.exception("AI placeholder correction failed; using original placeholder values: %s", exc)
+        return slot_values
+
+    merged = dict(slot_values)
+    for key, original in slot_values.items():
+        corrected = corrections.get(key)
+        if corrected is not None and str(corrected).strip():
+            merged[key] = str(corrected)
+        else:
+            merged[key] = original
+    return merged
 
 
 def _para_align(para) -> str:
@@ -2867,7 +3061,10 @@ def api_replace_and_open_edit_session():
     """
     try:
         filename, template_bytes, slot_values, table_params, table_object_params = _parse_replace_payload()
-        Document(BytesIO(template_bytes))
+        use_ai, prompt_ai = _parse_ai_replace_options()
+        doc = Document(BytesIO(template_bytes))
+        if use_ai:
+            slot_values = _ai_correct_slot_values(doc, slot_values, prompt_ai)
         result_bytes = fill_docx(template_bytes, slot_values, table_params, table_object_params=table_object_params)
         meta = _create_onlyoffice_edit_session(filename, result_bytes, sorted(slot_values.keys()))
     except json.JSONDecodeError as exc:
