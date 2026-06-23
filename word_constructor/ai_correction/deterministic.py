@@ -25,6 +25,64 @@ def format_ru_date_no_year_word(value: str) -> str:
     return f"{int(day):02d} {RU_MONTHS_GENT[month_idx]} {year}"
 
 
+def format_ru_date_full(value: str) -> str:
+    """'15.12.2025' → '15 декабря 2025 года'"""
+    match = re.fullmatch(r"\s*(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2}|\d{4})\s*", value or "")
+    if not match:
+        return value
+    day, month, year = match.groups()
+    month_idx = int(month)
+    if not 1 <= month_idx <= 12:
+        return value
+    if len(year) == 2:
+        year = f"20{year}"
+    return f"{int(day)} {RU_MONTHS_GENT[month_idx]} {year} года"
+
+
+def format_number_words_ru(value: str, case: str = "nomn") -> str:
+    """Convert numeric string to Russian words, optionally declined.
+
+    '30' → 'тридцать' (nomn), 'тридцати' (gent / datv / loct / ablt).
+    Falls back gracefully if num2words or pymorphy3 unavailable.
+    """
+    cleaned = re.sub(r"[\s ,]", "", str(value).strip())
+    try:
+        n = int(cleaned)
+    except (ValueError, TypeError):
+        return value
+    try:
+        from num2words import num2words as _n2w
+        words_str = _n2w(n, lang="ru")
+    except Exception:
+        return value
+    if case == "nomn":
+        return words_str
+    try:
+        import pymorphy3 as _pm
+        morph = _pm.MorphAnalyzer()
+        declined: list[str] = []
+        for word in words_str.split():
+            parsed = morph.parse(word)
+            best = parsed[0] if parsed else None
+            if best:
+                inflected = best.inflect({case})
+                declined.append(inflected.word if inflected else word)
+            else:
+                declined.append(word)
+        return " ".join(declined)
+    except Exception:
+        return words_str
+
+
+def format_days_bracket(value: str) -> str:
+    """'30' → '30 (тридцать)' — number with Russian prose in parentheses."""
+    words = format_number_words_ru(value, case="nomn")
+    if words == value:
+        return value
+    n = re.sub(r"[\s ,]", "", str(value).strip())
+    return f"{n} ({words})"
+
+
 def is_code_like_token(token: str) -> bool:
     cleaned = token.strip(".,;:()[]{}«»\"'")
     return bool(2 <= len(cleaned) <= 12 and re.search(r"[A-ZА-ЯЁҰҚІҒӘҺӨҮ]", cleaned) and cleaned.upper() == cleaned)
@@ -122,7 +180,7 @@ def normalize_signature_name(value: str) -> str:
             else:
                 fixed_words.append(word)
         return " ".join(fixed_words)
-    return normalized
+    return cleaned
 
 
 def _placeholder_context_pattern(pattern: str, key: str) -> str:
@@ -189,6 +247,9 @@ def apply_deterministic_case_hints(
         if not key or not occurrence:
             continue
         target = (key, occurrence)
+        if item.get("redundant_in"):
+            occurrence_values[target] = ""
+            continue
         if item.get("ai_excluded"):
             occurrence_values[target] = normalize_signature_title(value) if item.get("signature_title_normalize") else normalize_signature_name(value)
             continue
@@ -208,6 +269,14 @@ def apply_deterministic_case_hints(
             occurrence_values[target] = value
         elif hint == "date_ru_no_year_word":
             occurrence_values[target] = format_ru_date_no_year_word(value)
+        elif hint == "date_ru_full":
+            occurrence_values[target] = format_ru_date_full(value)
+        elif hint == "days_bracket":
+            occurrence_values[target] = format_days_bracket(value)
+        elif hint == "days_words_gent":
+            occurrence_values[target] = format_number_words_ru(value, case="gent")
+        elif hint == "days_words_nomn":
+            occurrence_values[target] = format_number_words_ru(value, case="nomn")
         elif hint in {"gent", "datv", "accs", "loct", "ablt", "nomn"}:
             occurrence_values[target] = decline_value(value, hint, decline_func)
 

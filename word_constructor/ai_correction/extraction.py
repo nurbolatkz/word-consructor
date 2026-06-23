@@ -83,6 +83,35 @@ def document_plain_text(doc: Document) -> str:
     return "\n".join(blocks)
 
 
+def document_full_text(doc: Document) -> str:
+    """Full document text: headers → body paragraphs/tables → footers.
+
+    Sent to AI as the single source of context so it can determine the correct
+    grammatical form of every placeholder from the surrounding prose, table
+    structure, and document-level framing text.
+    """
+    blocks: list[str] = []
+    for section_idx, section in enumerate(doc.sections):
+        for part_name, part in (("header", section.header), ("footer", section.footer)):
+            lines: list[str] = []
+            for para in part.paragraphs:
+                t = para_full_text(para).strip()
+                if t:
+                    lines.append(t)
+            for table in part.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        t = cell_text(cell).strip()
+                        if t:
+                            lines.append(t)
+            if lines:
+                blocks.append(f"[{part_name} section={section_idx}]\n" + "\n".join(lines))
+    for unit in iter_text_units(doc, include_headers_footers=False):
+        if unit.text.strip():
+            blocks.append(f"[{unit.source_type} {unit.source_path}]\n{unit.text}")
+    return "\n\n".join(blocks)
+
+
 def document_placeholder_scan_text(doc: Document) -> str:
     return "\n".join(unit.text for unit in iter_text_units(doc) if unit.text.strip())
 
@@ -164,6 +193,52 @@ def raw_placeholder_matches_from_doc(doc: Document, slot_values: dict[str, Any])
     return matches
 
 
+def _normalize_for_compare(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip().lower()
+
+
+def _word_prefixes(text: str, prefix_len: int = 5) -> frozenset[str]:
+    """Return word-prefix stems for fuzzy Russian/Kazakh inflection-tolerant matching.
+
+    Uses first `prefix_len` chars of each word (≥4 chars long) so that
+    'департамент' and 'департамента' both yield 'депар', enabling match
+    across nominative / genitive / accusative forms.
+    """
+    return frozenset(
+        w[:prefix_len]
+        for w in re.findall(r"[а-яёА-ЯЁa-zA-Zәіңғүұқөһ]{4,}", text.lower())
+    )
+
+
+def _mark_redundant_adjacent_occurrences(occurrences: list[Occurrence]) -> None:
+    """Mark occurrence A as redundant when all its significant words are already
+    present in adjacent occurrence B's value (inflection-tolerant via word prefixes).
+
+    Example: Должность='Главный менеджер департамента кадровой политики',
+             Подразделение='департамент кадровой политики'
+    All word-stems of Подразделение ⊂ word-stems of Должность
+    → Подразделение is marked redundant_in=<Должность occurrence id>.
+    """
+    id_to = {o.id: o for o in occurrences}
+    for item in occurrences:
+        val = _normalize_for_compare(item.original_value)
+        if not val or len(val) < 3:
+            continue
+        val_stems = _word_prefixes(val)
+        if not val_stems:
+            continue
+        for adj_id in item.adjacent_occurrence_ids:
+            adj = id_to.get(adj_id)
+            if not adj:
+                continue
+            adj_stems = _word_prefixes(_normalize_for_compare(adj.original_value))
+            # All significant words of current value must be a *proper* subset of adjacent
+            # (proper subset ensures the adjacent has more content, not just the same words)
+            if val_stems and val_stems < adj_stems:
+                item.redundant_in = adj_id
+                break
+
+
 def _mark_adjacent_occurrences(occurrences: list[Occurrence]) -> None:
     by_source: dict[str, list[Occurrence]] = {}
     for item in occurrences:
@@ -223,6 +298,7 @@ def extract_placeholder_occurrences(doc: Document, slot_values: dict[str, str], 
                 preserve_internal_abbreviations=bool(dept_rule.get("preserve_internal_abbreviations")) if fixed_department else False,
             ))
     _mark_adjacent_occurrences(occurrences)
+    _mark_redundant_adjacent_occurrences(occurrences)
     return [item.to_dict() for item in occurrences]
 
 
@@ -307,6 +383,8 @@ def find_occurrences(text_units: list[TextUnit], placeholders: dict[str, str]) -
                 context_with_value=context.replace(match.group(0), str(placeholders[key]), 1),
                 literal_placeholder=match.group(0),
             ))
+    _mark_adjacent_occurrences(occurrences)
+    _mark_redundant_adjacent_occurrences(occurrences)
     return occurrences
 
 

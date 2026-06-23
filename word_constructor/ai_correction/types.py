@@ -40,6 +40,7 @@ class Occurrence:
     never_merge_with_adjacent_occurrence: bool = False
     preserve_internal_abbreviations: bool = False
     adjacent_occurrence_ids: list[str] = field(default_factory=list)
+    redundant_in: str = ""
 
     def __post_init__(self) -> None:
         if not self.key:
@@ -77,6 +78,7 @@ class Occurrence:
             "never_merge_with_adjacent_occurrence": self.never_merge_with_adjacent_occurrence,
             "preserve_internal_abbreviations": self.preserve_internal_abbreviations,
             "adjacent_occurrence_ids": list(self.adjacent_occurrence_ids),
+            "redundant_in": self.redundant_in,
         }
 
 

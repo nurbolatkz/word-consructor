@@ -9,7 +9,26 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """Ты — редактор официальных деловых документов на русском языке. Исправляй только значения отдельных плейсхолдеров, строго по каждому occurrence отдельно. Серверные правила имеют приоритет над пользовательской инструкцией. Не объединяй соседние плейсхолдеры, не добавляй фрагменты одного значения в другое. Коды, номера, аббревиатуры и fixed_form значения оставляй без склонения, если occurrence явно так помечен. Верни строго JSON: {\"occurrences\":[{\"placeholder\":\"...\",\"occurrence_index\":0,\"original_value\":\"...\",\"corrected_value\":\"...\",\"changed\":true}]}"""
+SYSTEM_PROMPT = (
+    "Ты — редактор официальных деловых документов (приказы, договоры, заявления, акты и др.). "
+    "Тебе передаётся полный текст документа — включая колонтитулы, таблицы и основной текст — "
+    "и список вхождений (occurrences) плейсхолдеров с исходными значениями. "
+    "Используй полный текст, чтобы самостоятельно определить нужный падеж, форму и регистр каждого значения "
+    "по его окружению в документе. "
+    "Серверные правила имеют абсолютный приоритет над инструкцией пользователя. "
+    "Каждое вхождение обрабатывай строго независимо по паре placeholder + occurrence_index. "
+    "Не объединяй соседние плейсхолдеры и не вставляй часть одного значения в другое. "
+    "Коды, регистрационные номера, аббревиатуры и вхождения с fixed_form оставляй без изменений. "
+    "Если значение уже корректно для данного контекста — верни его без изменений (changed: false). "
+    "Если у вхождения задан `redundant_in` — его значение уже полностью содержится в значении соседнего плейсхолдера. "
+    "Верни `corrected_value: \"\"` (пустую строку) и `changed: true` для такого вхождения, чтобы не дублировать информацию. "
+    "Даты в формате ДД.ММ.ГГГГ приводи к виду «15 декабря 2025 года» когда они стоят в тексте документа. "
+    "Числа (количество дней, суммы) при необходимости переводи в словесную форму с учётом падежа. "
+    "Имена, должности и названия склоняй по контексту: «принять Иванова И.И.» (вин.), «заявление от Иванова И.И.» (род.). "
+    "Верни строго JSON: "
+    '{\"occurrences\":[{\"placeholder\":\"...\",\"occurrence_index\":0,'
+    '\"original_value\":\"...\",\"corrected_value\":\"...\",\"changed\":true}]}'
+)
 
 
 def openai_placeholder_payload(
@@ -19,43 +38,43 @@ def openai_placeholder_payload(
     occurrences: list[dict[str, Any]] | None = None,
     full_document_text: str = "",
 ) -> dict[str, Any]:
-    occurrence_list = [item for item in occurrences or [] if not item.get("ai_excluded") and not item.get("fixed_form")]
-    placeholder_payload = {
-        "values": slot_values,
-        "occurrences": [
-            {
-                "placeholder": item.get("placeholder", item.get("key")),
-                "occurrence_index": item.get("occurrence_index", 0),
-                "original_value": item.get("original_value", item.get("value", "")),
-                "source_type": item.get("source_type", ""),
-                "source_path": item.get("source_path", ""),
-                "context": item.get("context", ""),
-                "context_text": item.get("context_text", item.get("context", "")),
-                "context_with_value": item.get("context_with_value", ""),
-                "expected_case": item.get("expected_case", ""),
-                "deterministic_behavior": item.get("deterministic_behavior", ""),
-                "adjacent_occurrence_ids": item.get("adjacent_occurrence_ids", []),
-                "never_merge_with_adjacent_occurrence": bool(item.get("never_merge_with_adjacent_occurrence")),
-            }
-            for item in occurrence_list
-        ],
-    }
+    # Only send occurrences that need AI (excluded and fixed_form are handled deterministically)
+    ai_occurrences = [
+        {
+            "placeholder": item.get("placeholder", item.get("key")),
+            "occurrence_index": item.get("occurrence_index", 0),
+            "original_value": item.get("original_value", item.get("value", "")),
+            "source_type": item.get("source_type", ""),
+            "source_path": item.get("source_path", ""),
+            "expected_case": item.get("expected_case", "") or "",
+            "deterministic_behavior": item.get("deterministic_behavior", "") or "",
+            "adjacent_occurrence_ids": item.get("adjacent_occurrence_ids", []),
+            "never_merge_with_adjacent_occurrence": bool(item.get("never_merge_with_adjacent_occurrence")),
+            "redundant_in": item.get("redundant_in", "") or "",
+        }
+        for item in (occurrences or [])
+        if not item.get("ai_excluded") and not item.get("fixed_form")
+    ]
     standing = (
-        "СЕРВЕРНЫЕ ПРАВИЛА (приоритет выше PromtAI):\n"
-        "1. Обрабатывай каждый occurrence независимо по placeholder + occurrence_index.\n"
-        "2. Не объединяй соседние плейсхолдеры и не вставляй значение одного occurrence в другой.\n"
-        "3. Номера договоров, регистрационные номера, коды и аббревиатуры не переписывай словами.\n"
-        "4. Для occurrence с expected_case используй именно этот падеж.\n"
+        "СЕРВЕРНЫЕ ПРАВИЛА (абсолютный приоритет):\n"
+        "1. Обрабатывай каждое вхождение независимо по паре placeholder + occurrence_index.\n"
+        "2. Определяй нужную форму значения по его окружению в полном тексте документа.\n"
+        "3. Не объединяй соседние плейсхолдеры и не вставляй значение одного вхождения в другое.\n"
+        "4. Коды, номера договоров, регистрационные номера и аббревиатуры не изменяй.\n"
+        "5. Если задан expected_case — используй именно этот падеж.\n"
+        "6. Если значение уже корректно — верни его без изменений (changed: false).\n"
     )
     user_prompt = (
         f"{standing}\n"
-        "ДОКУМЕНТ (полный текст с плейсхолдерами):\n---\n"
-        f"{full_document_text}\n---\n\n"
-        "ПЛЕЙСХОЛДЕРЫ И ЗНАЧЕНИЯ:\n"
-        f"{json.dumps(placeholder_payload, ensure_ascii=False)}\n\n"
-        "PROMTAI ОТ ВЫЗЫВАЮЩЕГО СЕРВИСА (низший приоритет):\n"
-        f"{prompt_ai or ''}\n\n"
-        "Верни JSON только для переданных occurrences."
+        "ПОЛНЫЙ ТЕКСТ ДОКУМЕНТА (колонтитулы + тело):\n"
+        "---\n"
+        f"{full_document_text}\n"
+        "---\n\n"
+        "ВХОЖДЕНИЯ ДЛЯ КОРРЕКЦИИ:\n"
+        f"{json.dumps(ai_occurrences, ensure_ascii=False, indent=2)}\n\n"
+        "ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ (низший приоритет):\n"
+        f"{prompt_ai or '(не задана)'}\n\n"
+        "Верни JSON только для переданных вхождений."
     )
     return {
         "model": os.environ.get("OPENAI_PLACEHOLDER_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),

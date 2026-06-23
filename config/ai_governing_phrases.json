@@ -23,34 +23,76 @@
       "behavior": "preserve"
     },
     {
+      "id": "date_full_goda_suffix",
+      "placeholder_name_pattern": ".*(Дата|Date).*",
+      "context_pattern": "\\[{placeholder}\\]\\s*года",
+      "behavior": "date_ru_full"
+    },
+    {
       "id": "date_ot_goda",
       "placeholder_name_pattern": ".*(Дата|Date).*",
       "context_pattern": "(?:^|\\s)от\\s+\\[{placeholder}\\]\\s*(?:года|г\\.|год)(?:\\s|$|[.,;:])",
-      "behavior": "date_ru_no_year_word"
+      "behavior": "date_ru_full"
+    },
+    {
+      "id": "date_s_po",
+      "placeholder_name_pattern": ".*(Дата|Date|ДатаНачала|ДатаОкончания|ДатаПриема|ДатаУвольнения).*",
+      "context_pattern": "(?:^|\\s)(?:с|по|до|начиная\\s+с)\\s+\\[{placeholder}\\](?:\\s*года|\\s|$|[.,;:])",
+      "behavior": "date_ru_full"
+    },
+    {
+      "id": "days_bracket_propis",
+      "placeholder_name_pattern": ".*(Прописью|Словами|Words|ДнейПрописью|КолДнейПрописью).*",
+      "context_pattern": "\\[{placeholder}\\]",
+      "behavior": "days_bracket"
+    },
+    {
+      "id": "days_gent_v_techenie",
+      "placeholder_name_pattern": ".*(Дней|Days|Срок|КолДней|СрокДней).*",
+      "context_pattern": "в\\s+течени[еия]\\s+\\[{placeholder}\\]",
+      "behavior": "days_words_gent"
+    },
+    {
+      "id": "days_bracket_kal_days",
+      "placeholder_name_pattern": ".*(КолДней|Дней|Days|СрокДней).*",
+      "context_pattern": "\\[{placeholder}\\]\\s*(?:\\(|календарн|рабоч|банковск)",
+      "behavior": "days_bracket"
     },
     {
       "id": "name_after_ot",
-      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
       "context_pattern": "(?:^|\\s)от\\s+\\[{placeholder}\\](?:\\s|$|[.,;:])",
       "case": "gent"
     },
     {
       "id": "name_after_zayavlenie",
-      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
       "context_pattern": "(?:^|\\s)заявлени[еяю]\\s+(?:от\\s+)?\\[{placeholder}\\](?:\\s|$|[.,;:])",
       "case": "gent"
     },
     {
       "id": "name_after_prinyat",
-      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
       "context_pattern": "(?:^|\\s)принять\\s+\\[{placeholder}\\](?:\\s|$|[.,;:])",
       "case": "accs"
     },
     {
       "id": "name_after_predostavit_otpusk",
-      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
       "context_pattern": "предоставить[\\s\\S]{0,180}\\[{placeholder}\\][\\s\\S]{0,180}отпуск",
       "case": "datv"
+    },
+    {
+      "id": "name_uvolit",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
+      "context_pattern": "(?:уволить|расторгнуть|прекратить)[\\s\\S]{0,120}\\[{placeholder}\\]",
+      "case": "accs"
+    },
+    {
+      "id": "name_naznachit",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
+      "context_pattern": "(?:назначить|перевести)[\\s\\S]{0,120}\\[{placeholder}\\]",
+      "case": "accs"
     }
   ],
   "department_name_rules": {
