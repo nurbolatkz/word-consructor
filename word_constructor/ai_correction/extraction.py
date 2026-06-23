@@ -159,6 +159,14 @@ def looks_like_signature_title(value: str) -> bool:
     return bool(cleaned and _SIGNATURE_TITLE_RE.search(cleaned) and not looks_like_signature_name_or_label(cleaned))
 
 
+_JOB_TITLE_KEY_RE = re.compile(r"(?:должност|позиц|(?:^|[^а-я])title|position)", re.IGNORECASE)
+
+
+def _is_job_title_key(key: str) -> bool:
+    """True for job-title placeholder keys like РеквизитыДолжностьРуководителяНаименование."""
+    return bool(_JOB_TITLE_KEY_RE.search(key))
+
+
 def is_signature_or_approval_table_cell(unit: TextUnit, key: str, value: str) -> bool:
     if unit.source_type != "table_cell":
         return False
@@ -170,7 +178,14 @@ def is_signature_or_approval_table_cell(unit: TextUnit, key: str, value: str) ->
     placeholder_only_or_short = bool(is_sole_placeholder(text)) or len(text) <= 120
     row_has_signature_title = bool(_SIGNATURE_TITLE_RE.search(row_joined) or _SIGNATURE_TITLE_RE.search(value) or _SIGNATURE_TITLE_KEY_RE.search(row_joined))
     key_or_value_is_signatory = bool(_SIGNATURE_KEY_RE.search(key)) or looks_like_signature_name_or_label(value)
-    return placeholder_only_or_short and row_has_signature_title and key_or_value_is_signatory
+    if not (placeholder_only_or_short and row_has_signature_title and key_or_value_is_signatory):
+        return False
+    # Job-title keys (Должность, Position) in the signature block are NOT excluded from AI —
+    # AI sees the full document structure and can normalise capitalization and abbreviations itself.
+    # Only actual person-name values are excluded to prevent AI from mangling names.
+    if _is_job_title_key(key) and not looks_like_signature_name_or_label(value):
+        return False
+    return True
 
 
 def raw_placeholder_matches_from_doc(doc: Document, slot_values: dict[str, Any]) -> list[dict[str, Any]]:
