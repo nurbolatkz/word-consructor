@@ -44,7 +44,36 @@ import jwt
 from docx import Document
 from flask import Blueprint, abort, g, jsonify, redirect, render_template, request, send_file, session
 
-from word_constructor.transforms import apply_transform, get_transforms
+from word_constructor.transforms import apply_transform, get_transforms, склонить
+
+from word_constructor.ai_correction.deterministic import (
+    format_ru_date_no_year_word as _format_ru_date_no_year_word_new,
+    normalize_common_business_abbreviations as _normalize_common_business_abbreviations_new,
+    normalize_signature_name as _normalize_signature_name_new,
+    normalize_signature_title as _normalize_signature_title_new,
+    should_preserve_ai_corrected_value as _should_preserve_ai_corrected_value_new,
+)
+from word_constructor.ai_correction.extraction import (
+    PLACEHOLDER_RE as _AI_PLACEHOLDER_RE,
+    cell_text as _ai_cell_text,
+    context_snippet as _ai_context_snippet,
+    document_plain_text as _ai_document_plain_text,
+    document_placeholder_scan_text as _ai_document_placeholder_scan_text,
+    extract_header_footer_placeholder_occurrences as _ai_extract_header_footer_placeholder_occurrences,
+    extract_placeholder_contexts as _ai_extract_placeholder_contexts,
+    extract_placeholder_occurrences as _ai_extract_placeholder_occurrences,
+    iter_text_units as _ai_iter_text_units,
+    match_key as _ai_match_key,
+    raw_placeholder_matches_from_doc as _ai_raw_placeholder_matches_from_doc,
+    sanity_check_occurrence_counts as _ai_sanity_check_occurrence_counts,
+)
+from word_constructor.ai_correction.openai_client import (
+    openai_placeholder_payload as _ai_openai_placeholder_payload,
+    parse_openai_chat_content as _ai_parse_openai_chat_content,
+    request_ai_placeholder_corrections as _ai_request_ai_placeholder_corrections,
+)
+from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
+from word_constructor.ai_correction.pipeline import startup_health as ai_correction_startup_health
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +119,7 @@ OPENAI_PLACEHOLDER_TIMEOUT_SECONDS = max(
 
 def _match_key(m: re.Match) -> str:
     """Return the placeholder key regardless of which format matched."""
-    return (m.group(1) or m.group(2)).strip()
+    return _ai_match_key(m)
 
 
 def _resolve_table_cell(key: str, table_params: dict) -> str | None:
@@ -674,9 +703,23 @@ def _parse_ai_replace_options() -> tuple[bool, str]:
         payload = request.get_json(silent=True) or {}
         use_ai = _truthy_request_value(payload.get("UseAI", payload.get("use_ai", False)))
         prompt = str(payload.get("PromtAI", payload.get("PromptAI", payload.get("prompt_ai", ""))) or "")
+        logger.info(
+            "replace-edit AI options parsed: is_json=%s use_ai=%s prompt_present=%s payload_keys=%s",
+            request.is_json,
+            use_ai,
+            bool(prompt.strip()),
+            sorted(str(key) for key in payload.keys()),
+        )
         return use_ai, prompt
     use_ai = _truthy_request_value(request.form.get("UseAI") or request.form.get("use_ai"))
     prompt = request.form.get("PromtAI") or request.form.get("PromptAI") or request.form.get("prompt_ai") or ""
+    logger.info(
+        "replace-edit AI options parsed: is_json=%s use_ai=%s prompt_present=%s form_keys=%s",
+        request.is_json,
+        use_ai,
+        bool(str(prompt).strip()),
+        sorted(str(key) for key in request.form.keys()),
+    )
     return use_ai, str(prompt)
 
 
@@ -698,68 +741,611 @@ def _raw_ai_placeholder_values(slot_values: dict[str, str]) -> dict[str, Any]:
 
 
 def _placeholder_context_snippet(text: str, match: re.Match, window: int) -> str:
-    start = max(0, match.start() - window)
-    end = min(len(text), match.end() + window)
-    snippet = text[start:end]
-    snippet = re.sub(r"\s+", " ", snippet).strip()
-    if start > 0:
-        snippet = "..." + snippet
-    if end < len(text):
-        snippet = snippet + "..."
-    return snippet
+    return _ai_context_snippet(text, match, window)
 
+
+def _cell_text(cell) -> str:
+    return _ai_cell_text(cell)
+
+
+def _iter_docx_structural_text_units(doc: Document, include_headers_footers: bool = False):
+    for unit in _ai_iter_text_units(doc, include_headers_footers=include_headers_footers):
+        yield {
+            "source_type": unit.source_type,
+            "source_path": unit.source_path,
+            "text": unit.text,
+            "table_index": unit.table_index,
+            "row_index": unit.row_index,
+            "cell_index": unit.cell_index,
+            "row_cell_texts": list(unit.row_cell_texts),
+        }
 
 def _iter_docx_text_blocks(doc: Document):
-    for para in doc.paragraphs:
-        yield _para_full_text(para)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    yield _para_full_text(para)
+    for unit in _iter_docx_structural_text_units(doc):
+        yield unit["text"]
 
+
+def _document_plain_text(doc: Document) -> str:
+    return _ai_document_plain_text(doc)
+
+def _document_placeholder_scan_text(doc: Document) -> str:
+    return _ai_document_placeholder_scan_text(doc)
 
 def _extract_placeholder_contexts(doc: Document, slot_values: dict[str, str]) -> dict[str, list[str]]:
-    contexts: dict[str, list[str]] = {key: [] for key in slot_values}
-    if not slot_values:
-        return contexts
+    return _ai_extract_placeholder_contexts(doc, slot_values, AI_PLACEHOLDER_MAX_SNIPPETS)
 
+
+_SIGNATURE_TITLE_RE = re.compile(
+    r"\b(?:член[а-я]*|правлени[яею]|председател[яьюе]?|заместител[яьюе]?|директор[а-я]*|"
+    r"руководител[яьюе]?|начальник[а-я]*|исполнительн[а-я]+|генеральн[а-я]+)\b",
+    re.IGNORECASE,
+)
+_INITIAL_SURNAME_RE = re.compile(r"^[А-ЯЁA-Z]\.?\s*[А-ЯЁA-Z][А-ЯЁа-яёA-Za-z\-]+$")
+_FULL_NAME_RE = re.compile(r"^[А-ЯЁ][А-ЯЁа-яё\-]+(?:\s+[А-ЯЁ][А-ЯЁа-яё\-]+){1,3}$")
+_VERB_HINT_RE = re.compile(
+    r"\b(?:прошу|предоставить|назначить|уволить|перевести|согласовать|утвердить|"
+    r"является|составил|подписал|обязать|направить|принять)\b",
+    re.IGNORECASE,
+)
+_SIGNATURE_KEY_RE = re.compile(
+    r"(?:подпис|соглас|утверд|руковод|директор|председател|заместител|sign|signer)",
+    re.IGNORECASE,
+)
+_SIGNATURE_TITLE_KEY_RE = re.compile(
+    r"(?:должност|позици|руковод|директор|председател|заместител|title|position)",
+    re.IGNORECASE,
+)
+
+
+_RU_MONTHS_GENT = [
+    "", "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+]
+
+
+def _format_ru_date_no_year_word(value: str) -> str:
+    match = re.fullmatch(r"\s*(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2}|\d{4})\s*", value or "")
+    if not match:
+        return value
+    day, month, year = match.groups()
+    try:
+        month_idx = int(month)
+    except ValueError:
+        return value
+    if not 1 <= month_idx <= 12:
+        return value
+    if len(year) == 2:
+        year = f"20{year}"
+    return f"{int(day):02d} {_RU_MONTHS_GENT[month_idx]} {year}"
+
+
+def _fix_common_feminine_surname_case(original: str, declined: str, case: str) -> str:
+    original_words = (original or "").split()
+    declined_words = (declined or "").split()
+    if len(original_words) < 2 or len(original_words) != len(declined_words):
+        return declined
+
+    surname = original_words[0]
+    lower = surname.lower()
+    replacement = None
+    if lower.endswith(("ова", "ева", "ина")):
+        stem = surname[:-1]
+        if case == "accs":
+            replacement = stem + "у"
+        elif case in {"gent", "datv", "loct", "ablt"}:
+            replacement = stem + "ой"
+    elif lower.endswith("ая"):
+        stem = surname[:-2]
+        if case == "accs":
+            replacement = stem + "ую"
+        elif case in {"gent", "datv", "loct", "ablt"}:
+            replacement = stem + "ой"
+
+    if not replacement:
+        return declined
+    declined_words[0] = replacement
+    return " ".join(declined_words)
+
+
+def _preserve_kazakh_patronymic_suffixes(original: str, declined: str) -> str:
+    original_words = (original or "").split()
+    declined_words = (declined or "").split()
+    if len(original_words) != len(declined_words):
+        return declined
+    for idx, word in enumerate(original_words):
+        if word.lower().endswith(("ұлы", "улы", "қызы", "кизы")):
+            declined_words[idx] = word
+    return " ".join(declined_words)
+
+
+def _decline_value(value: str, case: str) -> str:
+    declined = склонить(value, case)
+    declined = _fix_common_feminine_surname_case(value, declined, case)
+    return _preserve_kazakh_patronymic_suffixes(value, declined)
+
+
+def _is_code_like_token(token: str) -> bool:
+    cleaned = token.strip(".,;:()[]{}«»\"'")
+    return bool(2 <= len(cleaned) <= 12 and re.search(r"[A-ZА-ЯЁҰҚІҒӘҺӨҮ]", cleaned) and cleaned.upper() == cleaned)
+
+
+def _normalize_common_business_abbreviations(value: str) -> str:
+    replacements = {"hr": "HR", "it": "IT", "pr": "PR", "ceo": "CEO", "cfo": "CFO", "cto": "CTO"}
+
+    def repl(match: re.Match) -> str:
+        return replacements.get(match.group(0).lower(), match.group(0))
+
+    return re.sub(r"\b(?:hr|it|pr|ceo|cfo|cto)\b", repl, value or "", flags=re.IGNORECASE)
+
+
+def _is_title_or_department_key(key: str) -> bool:
+    lower_key = key.lower()
+    return any(part in lower_key for part in ("должност", "позици", "подраздел", "департамент", "отдел", "управлен", "title", "position", "department", "division"))
+
+
+def _should_preserve_ai_corrected_value(key: str, original: str, corrected: str) -> bool:
+    lower_key = key.lower()
+    if not corrected or corrected == original:
+        return False
+    if any(part in lower_key for part in ("подраздел", "департамент", "отдел", "управлен", "department", "division")):
+        original_tokens = original.split()
+        if any(_is_code_like_token(token) for token in original_tokens):
+            corrected_tokens = corrected.split()
+            for token in original_tokens:
+                if _is_code_like_token(token) and token not in corrected_tokens:
+                    return True
+    return False
+
+
+def _looks_like_signature_name_or_label(value: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    if not cleaned:
+        return False
+    if _INITIAL_SURNAME_RE.match(cleaned):
+        return True
+    return bool(_FULL_NAME_RE.match(cleaned))
+
+
+def _looks_like_signature_title(value: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    return bool(cleaned and _SIGNATURE_TITLE_RE.search(cleaned) and not _looks_like_signature_name_or_label(cleaned))
+
+
+def _normalize_signature_title(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    if not cleaned:
+        return value
+    lowered = cleaned.lower()
+    return lowered[:1].upper() + lowered[1:]
+
+
+def _normalize_signature_name(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    if not cleaned:
+        return value
+
+    def fix_surname(match: re.Match) -> str:
+        prefix = match.group("prefix")
+        surname = match.group("surname")
+        return prefix + surname[:1].upper() + surname[1:].lower()
+
+    normalized = re.sub(
+        r"(?P<prefix>(?:[А-ЯЁA-Z]\.\s*){1,3})(?P<surname>[А-ЯЁA-Z]{2,}(?:-[А-ЯЁA-Z]{2,})*)\b",
+        fix_surname,
+        cleaned,
+    )
+
+    words = normalized.split()
+    if 1 <= len(words) <= 4 and any(word.isupper() and len(word) > 1 for word in words):
+        fixed_words = []
+        for word in words:
+            if re.fullmatch(r"(?:[А-ЯЁA-Z]\.){1,3}", word):
+                fixed_words.append(word.upper())
+            elif word.isupper() and len(word) > 1:
+                fixed_words.append(word[:1].upper() + word[1:].lower())
+            else:
+                fixed_words.append(word)
+        normalized = " ".join(fixed_words)
+    return normalized
+
+
+def _is_signature_or_approval_table_cell(unit: dict[str, Any], key: str, value: str) -> bool:
+    if unit.get("source_type") != "table_cell":
+        return False
+    text = re.sub(r"\s+", " ", str(unit.get("text") or "")).strip()
+    row_texts = [re.sub(r"\s+", " ", str(item or "")).strip() for item in unit.get("row_cell_texts") or []]
+    row_joined = " | ".join(row_texts)
+    if _VERB_HINT_RE.search(text):
+        return False
+
+    placeholder_only_or_short = bool(_is_sole_placeholder(text)) or len(text) <= 120
+    row_has_signature_title = bool(
+        _SIGNATURE_TITLE_RE.search(row_joined)
+        or _SIGNATURE_TITLE_RE.search(value)
+        or _SIGNATURE_TITLE_KEY_RE.search(row_joined)
+    )
+    key_or_value_is_signatory = bool(_SIGNATURE_KEY_RE.search(key)) or _looks_like_signature_name_or_label(value)
+    return placeholder_only_or_short and row_has_signature_title and key_or_value_is_signatory
+
+
+def _raw_placeholder_matches_from_doc(doc: Document, slot_values: dict[str, Any]) -> list[dict[str, Any]]:
+    return _ai_raw_placeholder_matches_from_doc(doc, slot_values)
+
+
+def _log_placeholder_occurrence_count_check(
+    doc: Document,
+    slot_values: dict[str, Any],
+    occurrences: list[dict[str, Any]],
+    log_key: str | None = None,
+) -> None:
+    raw_matches = _raw_placeholder_matches_from_doc(doc, slot_values)
+    scan_text = _document_placeholder_scan_text(doc)
     wanted = set(slot_values)
-    for text in _iter_docx_text_blocks(doc):
-        if not text:
-            continue
-        for match in _PLACEHOLDER_RE.finditer(text):
-            key = _match_key(match)
-            if key not in wanted:
-                continue
-            snippets = contexts.setdefault(key, [])
-            if len(snippets) >= AI_PLACEHOLDER_MAX_SNIPPETS:
-                continue
-            snippet = _placeholder_context_snippet(text, match, AI_PLACEHOLDER_CONTEXT_CHARS)
-            if snippet and snippet not in snippets:
-                snippets.append(snippet)
-    return contexts
-
-
-def _openai_placeholder_payload(slot_values: dict[str, Any], contexts: dict[str, list[str]], prompt_ai: str) -> dict[str, Any]:
-    user_payload = {
-        "placeholders": slot_values,
-        "placeholder_contexts": contexts,
-        "additional_user_guidance": prompt_ai or "",
+    full_text_raw_count = sum(1 for match in _PLACEHOLDER_RE.finditer(scan_text) if _match_key(match) in wanted)
+    raw_count = len(raw_matches)
+    occurrence_count = len(occurrences)
+    message_data = {
+        "use_ai_log_key": log_key,
+        "full_text_raw_match_count": full_text_raw_count,
+        "raw_match_count": raw_count,
+        "occurrence_count": occurrence_count,
+        "raw_matches": raw_matches,
+        "occurrences": [
+            {
+                "placeholder": item.get("placeholder", item.get("key")),
+                "occurrence_index": item.get("occurrence_index"),
+                "source_type": item.get("source_type"),
+                "source_path": item.get("source_path"),
+                "ai_excluded": item.get("ai_excluded"),
+                "ai_exclusion_reason": item.get("ai_exclusion_reason"),
+                "context_text": item.get("context_text"),
+            }
+            for item in occurrences
+        ],
     }
-    system_prompt = (
-        "You correct placeholder values before they are inserted into a Word document. "
-        "Use the surrounding document snippets to judge grammar, case/declension, date format, "
-        "semantic fit, and consistency. Return ONLY corrected values for the same placeholder keys. "
-        "Do not gratuitously rewrite already-correct values. Preserve each value's original meaning and intent; "
-        "only fix language, formatting, or correctness issues. Return strict JSON with exactly the same keys as "
-        "the input placeholders map and string values only. No commentary and no markdown fences."
+    if full_text_raw_count != occurrence_count or raw_count != occurrence_count:
+        logger.error(
+            "UseAI placeholder occurrence mismatch before OpenAI: found %s raw [Placeholder] regex matches in full extracted document text, found %s source-aware raw matches, but added %s occurrences: %s",
+            full_text_raw_count,
+            raw_count,
+            occurrence_count,
+            message_data,
+        )
+    else:
+        logger.debug(
+            "UseAI placeholder occurrence count check passed: found %s raw [Placeholder] regex matches in full extracted document text and added %s occurrences: %s",
+            full_text_raw_count,
+            occurrence_count,
+            message_data,
+        )
+
+
+def _extract_placeholder_occurrences(doc: Document, slot_values: dict[str, str]) -> list[dict[str, Any]]:
+    return _ai_extract_placeholder_occurrences(doc, slot_values)
+
+
+def _extract_header_footer_placeholder_occurrences(doc: Document, slot_values: dict[str, str]) -> list[dict[str, Any]]:
+    return _ai_extract_header_footer_placeholder_occurrences(doc, slot_values)
+
+
+AI_PLACEHOLDER_EXAMPLES = {
+    "examples": [
+        {
+            "id": "signature_table_bug",
+            "description": "Name in a signature/approval table wrongly declined to dative, inheriting case from an unrelated body paragraph. Also fixing capitalization of 'правления' (lowercase except first word of the phrase).",
+            "template_placeholders": {
+                "ДолжностьСогласующего": "члена Правления - заместителя председателя Правления",
+                "ФИОСогласующего": "Н. Джамышев",
+            },
+            "context_snippet": "Table row: [ДолжностьСогласующего] | [ФИОСогласующего]",
+            "current_wrong_output": "члена Правления - заместителя председателя Правления    Н. Джамышеву",
+            "expected_output": "Члена правления - заместителя председателя правления    Н. Джамышев",
+            "expected_case": "nominative",
+            "capitalization_rule": "Capitalize only the first letter of the whole job-title phrase; 'правления' is a common noun here (not part of a proper name like 'Совет директоров'/'Правление' as an organization name on its own) and should be lowercase in subsequent occurrences within the same phrase.",
+            "reason": "Signature block identifies who signed; it is a label, not a grammatical object of a verb in a sentence. Job-title phrases in such tables follow standard sentence-case capitalization: first word capitalized, the rest lowercase unless they are themselves proper nouns.",
+        },
+        {
+            "id": "table_cell_correct_declension_contrast",
+            "description": "Contrast case — a name inside a table cell that SHOULD be declined because the row's own text contains a grammatical role (genitive after 'заявления').",
+            "template_placeholders": {
+                "ФИОСотрудника": "Иванов Иван Иванович",
+                "Должность": "ведущий специалист",
+            },
+            "context_snippet": "Table column 'Основание': на основании заявления [ФИОСотрудника]",
+            "current_wrong_output": None,
+            "expected_output": "на основании заявления Иванова Ивана Ивановича",
+            "expected_case": "genitive",
+            "reason": "The cell's own text contains a preposition+noun ('заявления') that grammatically governs the case of the name. This is not the signature-table case — correction should still apply here.",
+        },
+        {
+            "id": "body_paragraph_case_bleed",
+            "description": "A second occurrence of the same name in a different body paragraph incorrectly reuses the dative/accusative case from an earlier paragraph instead of being analyzed independently.",
+            "template_placeholders": {
+                "ФИОСотрудника": "Джумабаева Роза Багиткалиевна",
+            },
+            "context_snippet_occurrence_0": "Принять [ФИОСотрудника] на должность главного менеджера управления учета брокерской деятельности АО «Halyk Finance»",
+            "context_snippet_occurrence_1": "Основание: трудовой договор № [НомерДоговора] от [ДатаНачалаДоговора] года, заявление [ФИОСотрудника]",
+            "current_wrong_output_occurrence_1": "заявление Джумабаеву Розу Багиткалиевну",
+            "expected_output_occurrence_0": "Джумабаеву Розу Багиткалиевну",
+            "expected_case_occurrence_0": "accusative",
+            "expected_output_occurrence_1": "заявление Джумабаевой Розы Багиткалиевны",
+            "expected_case_occurrence_1": "genitive",
+            "reason": "Each occurrence must be analyzed independently based on its own local grammar (verb 'принять [кого]' = accusative vs noun 'заявление [кого]' = genitive), not inherit the case from a previous occurrence of the same placeholder.",
+        },
+        {
+            "id": "regression_fixture_minimal",
+            "description": "Minimal fixture combining all cases above for automated regression testing, including capitalization rule for the signature-table job title.",
+            "document_structure": [
+                {"type": "body_paragraph", "index": 0, "text": "Принять [ФИО] на должность главного менеджера..."},
+                {"type": "body_paragraph", "index": 1, "text": "Основание: ..., заявление [ФИО]"},
+                {"type": "table_cell", "table_index": 0, "row": 0, "col": 0, "text": "[Должность2]"},
+                {"type": "table_cell", "table_index": 0, "row": 0, "col": 1, "text": "[ФИО2]"},
+            ],
+            "placeholder_values": {
+                "ФИО": "Джумабаева Роза Багиткалиевна",
+                "Должность2": "члена Правления - заместителя председателя Правления",
+                "ФИО2": "Н. Джамышев",
+            },
+            "expected_occurrences_response": {
+                "occurrences": [
+                    {"placeholder": "ФИО", "occurrence_index": 0, "source_type": "body_paragraph", "original_value": "Джумабаева Роза Багиткалиевна", "corrected_value": "Джумабаеву Розу Багиткалиевну", "changed": True},
+                    {"placeholder": "ФИО", "occurrence_index": 1, "source_type": "body_paragraph", "original_value": "Джумабаева Роза Багиткалиевна", "corrected_value": "Джумабаевой Розы Багиткалиевны", "changed": True},
+                    {"placeholder": "Должность2", "occurrence_index": 0, "source_type": "table_cell", "original_value": "члена Правления - заместителя председателя Правления", "corrected_value": "Члена правления - заместителя председателя правления", "changed": True},
+                    {"placeholder": "ФИО2", "occurrence_index": 0, "source_type": "table_cell", "original_value": "Н. Джамышев", "corrected_value": "Н. Джамышев", "changed": False},
+                ]
+            },
+            "success_criteria": [
+                "Occurrence 0 of ФИО is accusative.",
+                "Occurrence 1 of ФИО is genitive, independently derived, not copied from occurrence 0.",
+                "Должность2 in the table cell has only its first letter capitalized; 'правления' (second occurrence within the phrase) is lowercase.",
+                "ФИО2 in the table cell remains nominative/unchanged regardless of the case used for ФИО elsewhere in the document.",
+                "Должность2 in the table cell is not merged with or influenced by the preceding body paragraphs.",
+            ],
+        },
+    ]
+}
+
+
+AI_PLACEHOLDER_ADDITIONAL_EXAMPLES = {
+    "examples": [
+        {
+            "id": "header_invoice_number_no_correction",
+            "description": "Document header field (РегНомерДокумента) is a code/number, not natural language — must pass through unchanged regardless of UseAI, and must not be merged with the date field next to it in the same header row.",
+            "document_structure": [
+                {"type": "header_field", "label": "ДатаДокумента", "text": "<ДатаДокумента> года"},
+                {"type": "header_field", "label": "РегНомерДокумента", "text": "№ <РегНомерДокумента>"},
+            ],
+            "template_placeholders": {
+                "ДатаДокумента": "17.06.2026",
+                "РегНомерДокумента": "125-ЛС",
+            },
+            "current_wrong_output": "№ 125 ЛС года",
+            "expected_output": {
+                "ДатаДокумента": "17 июня 2026",
+                "РегНомерДокумента": "125-ЛС",
+            },
+            "reason": "РегНомерДокумента is an order/registration number (alphanumeric code with a hyphen) — it must never be reworded, expanded into words, or have its punctuation altered, and it must not absorb the word 'года' from the adjacent date field. ДатаДокумента, by contrast, is a real date and may be converted to word form if the surrounding template uses 'года' as a literal trailing word expecting a day+month+year phrase.",
+            "success_criteria": [
+                "РегНомерДокумента stays exactly '125-ЛС', unchanged.",
+                "ДатаДокумента and РегНомерДокумента are corrected independently — no cross-bleed between the two header fields.",
+                "No extra words ('года', 'номер', etc.) are injected into РегНомерДокумента.",
+            ],
+        },
+        {
+            "id": "city_name_no_declension",
+            "description": "Geographic/city name placeholder appearing twice in parallel header columns (Kazakh and Russian) — must not be declined or translated, must remain consistent in both columns.",
+            "document_structure": [
+                {"type": "header_field", "column": "kazakh", "text": "Алматы қаласы"},
+                {"type": "header_field", "column": "russian", "text": "город Алматы"},
+            ],
+            "template_placeholders": {"Город": "Алматы"},
+            "current_wrong_output": None,
+            "expected_output": {
+                "kazakh_column": "Алматы қаласы",
+                "russian_column": "город Алматы",
+            },
+            "reason": "City names are proper nouns and must stay in nominative case in this kind of bilingual document header regardless of any surrounding case-government words ('қаласы'/'город' are themselves invariant labels meaning 'city of'). The AI must recognize 'Город' here is a header label, not a grammatical object inside a sentence, and must not attempt to decline 'Алматы' (which is indeclinable in Russian anyway) or alter the Kazakh column independently from the Russian one.",
+            "success_criteria": [
+                "City name unchanged in both language columns.",
+                "No declension attempted on an indeclinable proper noun.",
+                "Kazakh and Russian columns are not cross-corrected based on each other's grammar.",
+            ],
+        },
+        {
+            "id": "organization_name_with_quotes_preserved",
+            "description": "Organization name with internal quotation marks and an abbreviation in Latin script (АО «Halyk Finance») embedded inside a body sentence that also needs case correction on a nearby placeholder — verify the org name itself is untouched while the surrounding sentence grammar is still corrected.",
+            "context_snippet": "Принять [ФИО] на должность главного менеджера управления учета брокерской деятельности АО «Halyk Finance», на условиях заключенного трудового договора, с <ДатаПриема> года.",
+            "template_placeholders": {
+                "ФИО": "Джумабаева Роза Багиткалиевна",
+                "ДатаПриема": "01.07.2026",
+            },
+            "current_wrong_output": "Принять Джумабаеву Розу Багиткалиевну на должность главного менеджера управления учета брокерской деятельности АО «Halyk финанс», на условиях заключенного трудового договора, с 1 июля 2026 года.",
+            "expected_output": "Принять Джумабаеву Розу Багиткалиевну на должность главного менеджера управления учета брокерской деятельности АО «Halyk Finance», на условиях заключенного трудового договора, с 01 июля 2026 года.",
+            "reason": "АО «Halyk Finance» is a legal entity name and must be preserved EXACTLY as written, including Latin script, capitalization, and quotation marks — it is not part of the placeholder set and must never be transliterated, translated, or 'corrected' for spelling. The placeholder ФИО is correctly declined to accusative ('Джумабаеву Розу Багиткалиевну') because 'принять [кого] на должность' governs accusative case. ДатаПриема may be converted to word form for the day+month but should preserve the original numeric day format with leading zero if that is how dates are styled elsewhere in this document (verify against the document's own date convention rather than always stripping leading zeros).",
+            "success_criteria": [
+                "АО «Halyk Finance» is byte-for-byte identical to the source text — zero edits, since it isn't a placeholder at all.",
+                "ФИО occurrence here is accusative, consistent with the verb 'принять ... на должность'.",
+                "Correction of one placeholder does not trigger unwanted edits to fixed, non-placeholder text elsewhere in the same sentence.",
+            ],
+        },
+        {
+            "id": "contract_basis_clause_multiple_placeholders_one_sentence",
+            "description": "A single sentence contains three different placeholders (НомерДоговора, ДатаНачалаДоговора, and a name in genitive) that must each be corrected according to their own grammatical role, without one correction affecting another.",
+            "context_snippet": "Основание: трудовой договор № [НомерДоговора] от [ДатаНачалаДоговора] года, заявление [ФИО]",
+            "template_placeholders": {
+                "НомерДоговора": "45/2026",
+                "ДатаНачалаДоговора": "01.07.2026",
+                "ФИО": "Джумабаева Роза Багиткалиевна",
+            },
+            "current_wrong_output": "Основание: трудовой договор № сорок пять от первого июля две тысячи двадцать шестого года, заявление Джумабаеву Розу Багиткалиевну",
+            "expected_output": "Основание: трудовой договор № 45/2026 от 01 июля 2026 года, заявление Джумабаевой Розы Багиткалиевны",
+            "reason": "НомерДоговора is a contract number/code and must stay in its original numeric/alphanumeric form ('45/2026') — it must NEVER be spelled out in words, even though 'ДатаНачалаДоговора' immediately next to it legitimately gets converted into a word-form date per this document's convention ('01 июля 2026 года'). ФИО here follows 'заявление [кого]' (genitive, 'application OF someone'), which is a DIFFERENT case than the same name's occurrence elsewhere in the document under 'принять [кого] на должность' (accusative) — each occurrence is graded independently by its own local governing word, never by global consistency with other occurrences of the same placeholder.",
+            "success_criteria": [
+                "НомерДоговора remains a raw alphanumeric code, never spelled out as words.",
+                "ДатаНачалаДоговора is converted to word form consistent with the document's date style, independent of how НомерДоговора is (not) converted.",
+                "ФИО is genitive here, NOT the same case used for this name's other occurrence in the document.",
+                "All three placeholders in the same sentence are corrected independently without one rule incorrectly applying to a different placeholder just because it sits next to a date that does get word-converted.",
+            ],
+        },
+        {
+            "id": "kazakh_russian_bilingual_heading_independent_correction",
+            "description": "Document title appears in both Kazakh ('БҰЙРЫҚ') and Russian ('ПРИКАЗ') as parallel headings — these are not translations to be cross-checked against each other, and neither should be 'corrected' since they are fixed document-type labels, not placeholders.",
+            "document_structure": [
+                {"type": "heading", "column": "kazakh", "text": "БҰЙРЫҚ"},
+                {"type": "heading", "column": "russian", "text": "ПРИКАЗ"},
+            ],
+            "template_placeholders": {},
+            "current_wrong_output": "БҦЙРЫК / ЗАКАЗ",
+            "expected_output": {
+                "kazakh_column": "БҰЙРЫҚ",
+                "russian_column": "ПРИКАЗ",
+            },
+            "reason": "Neither heading is a placeholder — both are fixed boilerplate document-type titles in their respective languages. The AI correction step must recognize text with no placeholder markers ([...] or <...>) as out-of-scope entirely and must never 'translate-check' one language column against the other. Also must not alter Kazakh-specific Cyrillic characters (Ұ, Қ) by normalizing them to visually similar but incorrect Russian Cyrillic letters.",
+            "success_criteria": [
+                "Both headings are completely unmodified — they are not placeholders and should never be sent through AI correction at all.",
+                "Kazakh-specific letters (Ұ, Қ, etc.) are preserved exactly, never substituted with similar-looking Russian letters.",
+                "No cross-language 'consistency' correction is attempted between the two parallel heading columns.",
+            ],
+        },
+    ]
+}
+
+AI_PLACEHOLDER_ALL_EXAMPLES = {
+    "examples": AI_PLACEHOLDER_EXAMPLES["examples"] + AI_PLACEHOLDER_ADDITIONAL_EXAMPLES["examples"]
+}
+
+
+
+AI_PLACEHOLDER_SYSTEM_PROMPT = """Ты — редактор официальных деловых документов на русском языке (приказы, заявления, служебные записки, кадровые документы и т.п.). Твоя задача — исправить значения плейсхолдеров так, чтобы они грамматически и стилистически правильно вписывались в окружающий текст документа, сохраняя при этом исходный смысл и фактическую информацию.
+
+ВХОДНЫЕ ДАННЫЕ:
+Ты получишь:
+1. Полный текст документа (с плейсхолдерами в виде [ИмяПлейсхолдера]).
+2. Список плейсхолдеров с их текущими (возможно неправильными) значениями.
+3. Дополнительную инструкцию от пользователя (если есть) — учитывай её как приоритетное указание сверх общих правил ниже.
+
+ПРАВИЛА ИСПРАВЛЕНИЯ:
+
+1. ГРАММАТИКА И ПАДЕЖИ
+   Каждое значение должно стоять в правильном падеже согласно своей роли в предложении на месте конкретного вхождения плейсхолдера. Один и тот же плейсхолдер может встречаться несколько раз в документе в разных падежах — анализируй КАЖДОЕ вхождение отдельно по контексту вокруг него, а не один раз для всего ключа.
+
+   Пример:
+   "От [ФИОСотрудника]" → родительный падеж → "От Иванова Ивана Ивановича"
+   "Прошу предоставить [ФИОСотрудника] отпуск" → дательный падеж → "Прошу предоставить Иванову Ивану Ивановичу отпуск"
+
+2. ОФИЦИАЛЬНО-ДЕЛОВОЙ СТИЛЬ
+   Исправляй разговорные, сокращённые или неформальные формулировки на официально-деловые, принятые в кадровом и юридическом делопроизводстве РК/РФ. Например:
+   "по семейный обстоятельства" → "по семейным обстоятельствам"
+   "директору департамента" (если контекст требует другого падежа/склонения) → "директора департамента по управлению персоналом" или соответствующая правильная форма
+
+3. ДАТЫ
+   Приводи даты к официальному формату документа, если контекст требует словесной формы:
+   "21.06.2026" → "21 июня 2026 года" (если в окружающем тексте дата упоминается словесно, например "Дата ____ 2026 года")
+   Если в документе дата используется в числовом формате (таблица, поле "Дата"), сохраняй числовой формат "дд.мм.гггг" без изменений, ЕСЛИ контекст явно не указывает на словесную форму.
+
+4. ДОЛЖНОСТИ И ОРГАНИЗАЦИОННЫЕ НАЗВАНИЯ
+   Сверяй должности/подразделения с правильным склонением и официальным наименованием, не сокращай и не меняй смысл (например, "директор" ≠ "директору", если контекст требует именительного падежа в шапке документа — "Кому: Директору департамента...").
+
+5. ИМЕНА СОБСТВЕННЫЕ
+   ФИО, названия организаций, БИН/ИИН, номера документов — НЕ изменяй по существу, только склоняй ФИО под правильный падеж согласно правилу 1. Никогда не выдумывай и не дополняй фактическую информацию, которой нет во входных данных.
+
+6. ЧТО НЕ ТРОГАТЬ
+   Если значение уже грамматически и стилистически корректно в данном контексте — верни его БЕЗ ИЗМЕНЕНИЙ. Не переписывай то, что не нуждается в исправлении.
+
+7. ОГРАНИЧЕНИЯ
+   - Не добавляй новую фактическую информацию, которой не было в исходном значении.
+   - Не меняй структуру документа, не предлагай альтернативные формулировки самого документа — только значения плейсхолдеров.
+   - Сохраняй регистр первой буквы исходного значения, если контекст (начало предложения / середина предложения) того требует.
+
+ФОРМАТ ОТВЕТА:
+Верни СТРОГО JSON без markdown-разметки, без комментариев, без пояснений — только JSON в следующей структуре:
+
+{
+  "occurrences": [
+    {
+      "placeholder": "ИмяПлейсхолдера",
+      "occurrence_index": 0,
+      "original_value": "исходное значение",
+      "corrected_value": "исправленное значение",
+      "changed": true
+    }
+  ]
+}
+
+Где:
+- "placeholder" — имя плейсхолдера без квадратных скобок.
+- "occurrence_index" — порядковый номер вхождения этого плейсхолдера в документе (0 для первого вхождения, 1 для второго и т.д.), если плейсхолдер встречается несколько раз.
+- "original_value" — значение, которое было передано на вход для этого плейсхолдера.
+- "corrected_value" — исправленное значение для данного конкретного вхождения.
+- "changed" — true, если значение было изменено; false, если оставлено как есть.
+
+Если плейсхолдер встречается только один раз в документе — верни один объект с occurrence_index: 0.
+
+Не возвращай ничего, кроме этого JSON-объекта.
+
+ПРИМЕРЫ ДЛЯ ОРИЕНТАЦИИ:
+""" + json.dumps(AI_PLACEHOLDER_ALL_EXAMPLES, ensure_ascii=False, indent=2)
+
+
+def _openai_placeholder_payload(
+    slot_values: dict[str, Any],
+    contexts: dict[str, list[str]],
+    prompt_ai: str,
+    occurrences: list[dict[str, Any]] | None = None,
+    full_document_text: str = "",
+) -> dict[str, Any]:
+    occurrence_list = [item for item in occurrences or [] if not item.get("ai_excluded")]
+    skipped = len(occurrences or []) - len(occurrence_list)
+    if skipped:
+        logger.warning(
+            "UseAI OpenAI payload omits %s extracted placeholder occurrences because they are ai_excluded: %s",
+            skipped,
+            [
+                {
+                    "placeholder": item.get("placeholder", item.get("key")),
+                    "occurrence_index": item.get("occurrence_index"),
+                    "source_type": item.get("source_type"),
+                    "source_path": item.get("source_path"),
+                    "reason": item.get("ai_exclusion_reason"),
+                    "context_text": item.get("context_text"),
+                }
+                for item in occurrences or []
+                if item.get("ai_excluded")
+            ],
+        )
+    placeholder_payload = {
+        "values": slot_values,
+        "occurrences": [
+            {
+                "placeholder": item.get("placeholder", item.get("key")),
+                "occurrence_index": item.get("occurrence_index", 0),
+                "original_value": item.get("original_value", item.get("value", "")),
+                "source_type": item.get("source_type", ""),
+                "source_path": item.get("source_path", ""),
+                "context": item.get("context", ""),
+                "context_text": item.get("context_text", item.get("context", "")),
+                "context_with_value": item.get("context_with_value", ""),
+            }
+            for item in occurrence_list
+        ],
+    }
+    user_prompt = (
+        "ДОКУМЕНТ (полный текст с плейсхолдерами):\n"
+        "---\n"
+        f"{full_document_text}\n"
+        "---\n\n"
+        "ПЛЕЙСХОЛДЕРЫ И ЗНАЧЕНИЯ:\n"
+        f"{json.dumps(placeholder_payload, ensure_ascii=False)}\n\n"
+        "ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ОТ ПОЛЬЗОВАТЕЛЯ:\n"
+        f"{prompt_ai or ''}\n\n"
+        "Исправь значения плейсхолдеров согласно правилам выше, учитывая контекст каждого конкретного "
+        "вхождения в тексте документа."
     )
     return {
         "model": os.environ.get("OPENAI_PLACEHOLDER_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            {"role": "system", "content": AI_PLACEHOLDER_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0,
@@ -785,14 +1371,117 @@ def _parse_openai_chat_content(raw_response: bytes) -> str:
     raise ValueError("OpenAI response content is empty")
 
 
-def _request_ai_placeholder_corrections(slot_values: dict[str, Any], contexts: dict[str, list[str]], prompt_ai: str) -> dict[str, str]:
+def _case_hint_for_placeholder_occurrence(key: str, context: str) -> str | None:
+    lower_key = key.lower()
+    lower_context = context.lower()
+    bracket_key = f"[{lower_key}]"
+    is_person_key = "фио" in lower_key or "сотрудник" in lower_key
+    is_date_key = "дата" in lower_key or "date" in lower_key
+    is_number_key = "номер" in lower_key or "number" in lower_key or "code" in lower_key
+
+    if is_number_key and re.search(rf"(?:№|номер\s+)\s*{re.escape(bracket_key)}", lower_context):
+        return "preserve"
+    if is_date_key and re.search(rf"(?:^|\s)от\s+{re.escape(bracket_key)}\s*(?:года|г\.|год)(?:\s|$|[.,;:])", lower_context):
+        return "date_ru_no_year_word"
+    if re.search(rf"(?:^|\s)от\s+{re.escape(bracket_key)}(?:\s|$|[.,;:])", lower_context):
+        return "gent"
+    if is_person_key and re.search(rf"(?:^|\s)заявлени[еяю]\s+{re.escape(bracket_key)}(?:\s|$|[.,;:])", lower_context):
+        return "gent"
+    if is_person_key and re.search(rf"(?:^|\s)принять\s+{re.escape(bracket_key)}(?:\s|$|[.,;:])", lower_context):
+        return "accs"
+    if re.search(rf"(?:^|\s)дата\s+{re.escape(bracket_key)}(?:\s|$|[.,;:])", lower_context):
+        return "preserve"
+    if "предоставить" in lower_context and "отпуск" in lower_context:
+        if is_person_key:
+            return "datv"
+        if "должност" in lower_key:
+            return "preserve"
+    return None
+
+
+def _apply_deterministic_case_hints(
+    occurrence_values: dict[tuple[str, int], str],
+    occurrences: list[dict[str, Any]],
+) -> None:
+    for item in occurrences:
+        key = str(item.get("key") or "")
+        occurrence = int(item.get("occurrence") or 0)
+        value = str(item.get("value") or "")
+        context = str(item.get("context") or "")
+        if item.get("ai_excluded"):
+            if key and occurrence:
+                occurrence_values[(key, occurrence)] = (
+                    _normalize_signature_title(value)
+                    if item.get("signature_title_normalize")
+                    else _normalize_signature_name(value)
+                )
+            continue
+        if key and occurrence and value and _is_title_or_department_key(key):
+            normalized_value = _normalize_common_business_abbreviations(value)
+            if normalized_value != value:
+                occurrence_values[(key, occurrence)] = normalized_value
+        case = _case_hint_for_placeholder_occurrence(key, context)
+        if not key or not occurrence or not value or not case:
+            continue
+        if case == "preserve":
+            occurrence_values[(key, occurrence)] = value
+        elif case == "date_ru_no_year_word":
+            occurrence_values[(key, occurrence)] = _format_ru_date_no_year_word(value)
+        else:
+            occurrence_values[(key, occurrence)] = _decline_value(value, case)
+
+
+def _request_ai_placeholder_corrections(
+    slot_values: dict[str, Any],
+    contexts: dict[str, list[str]],
+    prompt_ai: str,
+    occurrences: list[dict[str, Any]] | None = None,
+    full_document_text: str = "",
+    log_key: str | None = None,
+    call_log: dict[str, Any] | None = None,
+) -> dict[str, str]:
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if call_log is not None:
+        call_log["key"] = log_key
+        call_log["openai_config"] = {
+            "model": os.environ.get("OPENAI_PLACEHOLDER_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),
+            "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        }
     if not api_key:
-        logger.warning("UseAI requested for replace-edit, but OPENAI_API_KEY is not configured")
+        if call_log is not None:
+            call_log["error"] = "OPENAI_API_KEY is not configured"
+        logger.warning(
+            "UseAI requested for replace-edit, but OPENAI_API_KEY is not configured: use_ai_log_key=%s",
+            log_key,
+        )
         return {}
 
-    body = json.dumps(_openai_placeholder_payload(slot_values, contexts, prompt_ai), ensure_ascii=False).encode("utf-8")
+    body = json.dumps(
+        _openai_placeholder_payload(slot_values, contexts, prompt_ai, occurrences, full_document_text),
+        ensure_ascii=False,
+    ).encode("utf-8")
     base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    request_body_text = body.decode("utf-8", errors="replace")
+    if call_log is not None:
+        call_log["request"] = {
+            "url": f"{base_url}/chat/completions",
+            "method": "POST",
+            "body": json.loads(request_body_text),
+        }
+    logger.info(
+        "UseAI requested for replace-edit; calling OpenAI placeholder correction: use_ai_log_key=%s model=%s base_url=%s placeholders=%s occurrences=%s prompt_present=%s",
+        log_key,
+        os.environ.get("OPENAI_PLACEHOLDER_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),
+        base_url,
+        sorted(str(key) for key in slot_values.keys()),
+        len(occurrences or []),
+        bool(prompt_ai.strip()),
+    )
+    logger.info(
+        "UseAI OpenAI request body: use_ai_log_key=%s body=%s",
+        log_key,
+        request_body_text,
+    )
     req = Request(
         f"{base_url}/chat/completions",
         data=body,
@@ -802,39 +1491,117 @@ def _request_ai_placeholder_corrections(slot_values: dict[str, Any], contexts: d
         },
         method="POST",
     )
-    with urlopen(req, timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS) as resp:
-        content = _parse_openai_chat_content(resp.read())
+    try:
+        with urlopen(req, timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS) as resp:
+            raw_response = resp.read()
+            logger.info(
+                "OpenAI placeholder correction response received: use_ai_log_key=%s status=%s bytes=%s",
+                log_key,
+                getattr(resp, "status", None),
+                len(raw_response),
+            )
+            raw_response_text = raw_response.decode("utf-8", errors="replace")
+            logger.info(
+                "UseAI OpenAI raw response: use_ai_log_key=%s body=%s",
+                log_key,
+                raw_response_text,
+            )
+            if call_log is not None:
+                try:
+                    response_body: Any = json.loads(raw_response_text)
+                except json.JSONDecodeError:
+                    response_body = raw_response_text
+                call_log["response"] = {
+                    "status": getattr(resp, "status", None),
+                    "bytes": len(raw_response),
+                    "body": response_body,
+                }
+            content = _parse_openai_chat_content(raw_response)
+    except HTTPError as exc:
+        raw_error = exc.read()
+        raw_error_text = raw_error.decode("utf-8", errors="replace")
+        if call_log is not None:
+            try:
+                error_body: Any = json.loads(raw_error_text)
+            except json.JSONDecodeError:
+                error_body = raw_error_text
+            call_log["response"] = {
+                "status": exc.code,
+                "bytes": len(raw_error),
+                "body": error_body,
+            }
+            call_log["error"] = f"OpenAI HTTP {exc.code}"
+        logger.error(
+            "UseAI OpenAI error response: use_ai_log_key=%s status=%s body=%s",
+            log_key,
+            exc.code,
+            raw_error_text,
+        )
+        raise
 
     parsed = json.loads(content)
     if not isinstance(parsed, dict):
         raise ValueError("OpenAI correction payload is not a JSON object")
-    allowed = set(slot_values)
+    occurrence_lookup = {
+        (str(item.get("placeholder", item.get("key"))), int(item.get("occurrence_index", 0))): str(item.get("id"))
+        for item in occurrences or []
+        if (item.get("placeholder") or item.get("key")) and not item.get("ai_excluded")
+    }
     corrections: dict[str, str] = {}
+    parsed_occurrences = parsed.get("occurrences")
+    if isinstance(parsed_occurrences, list):
+        for item in parsed_occurrences:
+            if not isinstance(item, dict):
+                continue
+            placeholder = str(item.get("placeholder") or "").strip()
+            try:
+                occurrence_index = int(item.get("occurrence_index", 0))
+            except (TypeError, ValueError):
+                continue
+            correction_id = occurrence_lookup.get((placeholder, occurrence_index))
+            corrected = item.get("corrected_value")
+            if correction_id and corrected is not None and str(corrected).strip():
+                corrections[correction_id] = str(corrected)
+        return corrections
+
+    allowed = {str(item.get("id")) for item in occurrences or [] if item.get("id") and not item.get("ai_excluded")} or set(slot_values)
     for key, value in parsed.items():
-        if key in allowed and value is not None:
+        if key in allowed and value is not None and str(value).strip():
             corrections[str(key)] = str(value)
     return corrections
 
 
-def _ai_correct_slot_values(doc: Document, slot_values: dict[str, str], prompt_ai: str) -> dict[str, str]:
+def _ai_correct_slot_values(
+    doc: Document,
+    slot_values: dict[str, str],
+    prompt_ai: str,
+    log_key: str | None = None,
+    call_log: dict[str, Any] | None = None,
+) -> tuple[dict[str, str], dict[tuple[str, int], str]]:
     if not slot_values:
-        return slot_values
+        return slot_values, {}
     try:
-        contexts = _extract_placeholder_contexts(doc, slot_values)
-        ai_values = _raw_ai_placeholder_values(slot_values)
-        corrections = _request_ai_placeholder_corrections(ai_values, contexts, prompt_ai)
+        result = _ai_pipeline_correct_slot_values(
+            doc,
+            slot_values,
+            prompt_ai,
+            склонить,
+            raw_ai_values=_raw_ai_placeholder_values(slot_values),
+            log_key=log_key,
+            call_log=call_log,
+            timeout_seconds=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS,
+        )
+        return result.slot_values, result.occurrence_values
     except Exception as exc:
-        logger.exception("AI placeholder correction failed; using original placeholder values: %s", exc)
-        return slot_values
+        logger.exception(
+            "AI placeholder correction pipeline failed; using original placeholder values: use_ai_log_key=%s error=%s",
+            log_key,
+            exc,
+        )
+        if call_log is not None:
+            call_log["error"] = f"AI placeholder correction pipeline failed: {exc}"
+        return slot_values, {}
 
-    merged = dict(slot_values)
-    for key, original in slot_values.items():
-        corrected = corrections.get(key)
-        if corrected is not None and str(corrected).strip():
-            merged[key] = str(corrected)
-        else:
-            merged[key] = original
-    return merged
 
 
 def _para_align(para) -> str:
@@ -1044,18 +1811,58 @@ def _clear_row_text(row) -> None:
                 run.text = ""
 
 
-def _replace_in_para(para, resolver) -> None:
-    full = "".join(r.text for r in para.runs)
-    if not _PLACEHOLDER_RE.search(full):
+def _run_index_at(spans: list[tuple[int, int]], pos: int) -> tuple[int, int] | None:
+    for idx, (start, end) in enumerate(spans):
+        if start <= pos < end:
+            return idx, pos - start
+    return None
+
+
+def _replace_matches_preserving_runs(para, resolver) -> None:
+    original_texts = [run.text for run in para.runs]
+    full = "".join(original_texts)
+    matches = list(_PLACEHOLDER_RE.finditer(full))
+    if not matches:
         return
-    new_text = _PLACEHOLDER_RE.sub(lambda m: str(resolver(_match_key(m), m.group(0))), full)
-    replaced = False
-    for run in para.runs:
-        if not replaced:
-            run.text = new_text
-            replaced = True
-        else:
-            run.text = ""
+
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for value in original_texts:
+        start = cursor
+        cursor += len(value)
+        spans.append((start, cursor))
+
+    updated = list(original_texts)
+    for match in reversed(matches):
+        start_pos = _run_index_at(spans, match.start())
+        end_pos = _run_index_at(spans, match.end() - 1)
+        if start_pos is None or end_pos is None:
+            continue
+
+        start_idx, start_offset = start_pos
+        end_idx, end_offset_inclusive = end_pos
+        end_offset = end_offset_inclusive + 1
+        replacement = str(resolver(match))
+
+        if start_idx == end_idx:
+            current = updated[start_idx]
+            updated[start_idx] = current[:start_offset] + replacement + current[end_offset:]
+            continue
+
+        updated[start_idx] = updated[start_idx][:start_offset] + replacement
+        for idx in range(start_idx + 1, end_idx):
+            updated[idx] = ""
+        updated[end_idx] = updated[end_idx][end_offset:]
+
+    for run, value in zip(para.runs, updated):
+        run.text = value
+
+
+def _replace_in_para(para, resolver) -> None:
+    def resolve_match(match: re.Match) -> str:
+        return str(resolver(_match_key(match), match.group(0)))
+
+    _replace_matches_preserving_runs(para, resolve_match)
 
 
 def _replace_in_row(row, resolver) -> None:
@@ -1133,11 +1940,14 @@ def fill_docx(
     table_params: dict[str, list] | None = None,
     injected_tables: list[dict] | None = None,
     table_object_params: dict[str, list[dict[str, str]]] | None = None,
+    slot_occurrence_values: dict[tuple[str, int], str] | None = None,
 ) -> bytes:
     doc = Document(BytesIO(template_bytes))
     table_params = table_params or {}
     injected_tables = injected_tables or []
     table_object_params = table_object_params or {}
+    slot_occurrence_values = slot_occurrence_values or {}
+    occurrence_counts: dict[str, int] = {}
 
     _expand_object_table_rows(doc, table_object_params)
 
@@ -1183,6 +1993,10 @@ def fill_docx(
 
         def _resolve(m: re.Match) -> str:
             key = _match_key(m)
+            occurrence_counts[key] = occurrence_counts.get(key, 0) + 1
+            occurrence_value = slot_occurrence_values.get((key, occurrence_counts[key]))
+            if occurrence_value is not None:
+                return occurrence_value
             # User-edited slot values take highest priority
             if key in slot_values:
                 return slot_values[key]
@@ -1193,22 +2007,21 @@ def fill_docx(
                     return resolved
             return m.group(0)  # leave unknown placeholders as-is
 
-        new_text = _PLACEHOLDER_RE.sub(_resolve, full)
-        replaced = False
-        for run in para.runs:
-            if not replaced:
-                run.text = new_text
-                replaced = True
-            else:
-                run.text = ""
+        _replace_matches_preserving_runs(para, _resolve)
 
-    for para in doc.paragraphs:
-        _replace_para(para)
-    for tbl in doc.tables:
-        for row in tbl.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    _replace_para(para)
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    for child in doc.element.body:
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if tag == "p":
+            _replace_para(Paragraph(child, doc))
+        elif tag == "tbl":
+            tbl = Table(child, doc)
+            for row in tbl.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        _replace_para(para)
 
     buf = BytesIO()
     doc.save(buf)
@@ -3063,9 +3876,24 @@ def api_replace_and_open_edit_session():
         filename, template_bytes, slot_values, table_params, table_object_params = _parse_replace_payload()
         use_ai, prompt_ai = _parse_ai_replace_options()
         doc = Document(BytesIO(template_bytes))
+        slot_occurrence_values: dict[tuple[str, int], str] = {}
+        use_ai_log_key = f"useai-{uuid.uuid4().hex}" if use_ai else None
+        use_ai_log: dict[str, Any] | None = {"key": use_ai_log_key} if use_ai_log_key else None
         if use_ai:
-            slot_values = _ai_correct_slot_values(doc, slot_values, prompt_ai)
-        result_bytes = fill_docx(template_bytes, slot_values, table_params, table_object_params=table_object_params)
+            slot_values, slot_occurrence_values = _ai_correct_slot_values(
+                doc,
+                slot_values,
+                prompt_ai,
+                use_ai_log_key,
+                use_ai_log,
+            )
+        result_bytes = fill_docx(
+            template_bytes,
+            slot_values,
+            table_params,
+            table_object_params=table_object_params,
+            slot_occurrence_values=slot_occurrence_values,
+        )
         meta = _create_onlyoffice_edit_session(filename, result_bytes, sorted(slot_values.keys()))
     except json.JSONDecodeError as exc:
         return jsonify({"error": f"Invalid JSON params: {exc}"}), 400
@@ -3076,14 +3904,19 @@ def api_replace_and_open_edit_session():
 
     session_id = meta["id"]
     base = "/services/word-constructor"
-    return jsonify({
+    response_payload = {
         "id": session_id,
         "editor_url": f"{base}/template-builder/{session_id}?source=from1c",
         "status_url": f"{base}/api/1c/edit-sessions/{session_id}/status",
         "update_url": f"{base}/api/1c/edit-sessions/{session_id}/document",
         "download_url": f"{base}/api/1c/edit-sessions/{session_id}/document",
         "expires_at": meta["expires_at_iso"],
-    }), 201
+    }
+    if use_ai_log_key:
+        response_payload["use_ai_log_key"] = use_ai_log_key
+    if use_ai_log:
+        response_payload["use_ai_log"] = use_ai_log
+    return jsonify(response_payload), 201
 
 
 @word_constructor.get("/api/1c/edit-sessions/<session_id>/status")

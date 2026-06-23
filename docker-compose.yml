@@ -23,8 +23,10 @@ services:
       OPENAI_PLACEHOLDER_TIMEOUT_SECONDS: ${OPENAI_PLACEHOLDER_TIMEOUT_SECONDS:-8}
       AI_PLACEHOLDER_CONTEXT_CHARS: ${AI_PLACEHOLDER_CONTEXT_CHARS:-240}
       AI_PLACEHOLDER_MAX_SNIPPETS: ${AI_PLACEHOLDER_MAX_SNIPPETS:-5}
+      AI_GOVERNING_RULES_PATH: ${AI_GOVERNING_RULES_PATH:-/app/config/ai_governing_phrases.json}
     volumes:
       - word_constructor_tmp:/tmp/kazuni_word_constructor
+      - ./config/ai_governing_phrases.json:/app/config/ai_governing_phrases.json:ro
     depends_on:
       onlyoffice:
         condition: service_started

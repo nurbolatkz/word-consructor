@@ -20,6 +20,7 @@ from word_constructor.app import (
     _session_template_path,
     _tb_ws_register,
     word_constructor,
+    ai_correction_startup_health,
 )
 
 
@@ -43,6 +44,7 @@ def create_app() -> Flask:
         os.environ.get("MAX_CONTENT_LENGTH", str(32 * 1024 * 1024))
     )
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+    app.logger.info("UseAI startup health: %s", ai_correction_startup_health())
 
     app.register_blueprint(word_constructor, url_prefix="/services/word-constructor")
     app.register_blueprint(sign_document, url_prefix="/sign_document")
@@ -56,7 +58,9 @@ def create_app() -> Flask:
 
     @app.get("/health")
     def health():
-        return jsonify({"status": "ok", "service": "word-constructor"})
+        payload = {"status": "ok", "service": "word-constructor"}
+        payload.update(ai_correction_startup_health())
+        return jsonify(payload)
 
     @sock.route("/services/word-constructor/api/template-builder/<session_id>/ws")
     def template_builder_ws(ws, session_id):

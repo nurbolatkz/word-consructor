@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "business_abbreviations": {
+    "hr": "HR",
+    "it": "IT",
+    "pr": "PR",
+    "ceo": "CEO",
+    "cfo": "CFO",
+    "cto": "CTO"
+  },
+  "preserve_code_placeholder_patterns": [
+    ".*Номер.*",
+    ".*РегНомер.*",
+    ".*Код.*",
+    ".*Code.*",
+    ".*Number.*"
+  ],
+  "governing_phrases": [
+    {
+      "id": "contract_number_after_no",
+      "placeholder_name_pattern": ".*",
+      "context_pattern": "(?:№|номер\\s+)\\s*\\[{placeholder}\\]",
+      "behavior": "preserve"
+    },
+    {
+      "id": "date_ot_goda",
+      "placeholder_name_pattern": ".*(Дата|Date).*",
+      "context_pattern": "(?:^|\\s)от\\s+\\[{placeholder}\\]\\s*(?:года|г\\.|год)(?:\\s|$|[.,;:])",
+      "behavior": "date_ru_no_year_word"
+    },
+    {
+      "id": "name_after_ot",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "context_pattern": "(?:^|\\s)от\\s+\\[{placeholder}\\](?:\\s|$|[.,;:])",
+      "case": "gent"
+    },
+    {
+      "id": "name_after_zayavlenie",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "context_pattern": "(?:^|\\s)заявлени[еяю]\\s+(?:от\\s+)?\\[{placeholder}\\](?:\\s|$|[.,;:])",
+      "case": "gent"
+    },
+    {
+      "id": "name_after_prinyat",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "context_pattern": "(?:^|\\s)принять\\s+\\[{placeholder}\\](?:\\s|$|[.,;:])",
+      "case": "accs"
+    },
+    {
+      "id": "name_after_predostavit_otpusk",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник).*",
+      "context_pattern": "предоставить[\\s\\S]{0,180}\\[{placeholder}\\][\\s\\S]{0,180}отпуск",
+      "case": "datv"
+    }
+  ],
+  "department_name_rules": {
+    "placeholder_name_patterns": [
+      "Подразделение.*",
+      ".*Подразделение.*",
+      "Департамент.*",
+      ".*Департамент.*",
+      "Отдел.*",
+      ".*Отдел.*",
+      ".*ПодразделениеНаименование",
+      ".*(Department|Division).*"
+    ],
+    "behavior": "fixed_form",
+    "default_case": "nominative",
+    "never_merge_with_adjacent_occurrence": true,
+    "preserve_internal_abbreviations": true
+  }
+}

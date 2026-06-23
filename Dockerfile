@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY sign_document.py .
 COPY static ./static
+COPY config ./config
 COPY word_constructor ./word_constructor
 
 EXPOSE 5000
