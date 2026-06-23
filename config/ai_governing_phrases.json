@@ -68,5 +68,10 @@
     "default_case": "nominative",
     "never_merge_with_adjacent_occurrence": true,
     "preserve_internal_abbreviations": true
-  }
+  },
+  "preserve_abbreviations": [
+    "ВОАД",
+    "АУП",
+    "КПП"
+  ]
 }

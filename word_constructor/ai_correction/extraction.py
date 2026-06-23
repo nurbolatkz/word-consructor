@@ -272,3 +272,48 @@ def extract_placeholder_contexts(doc: Document, slot_values: dict[str, str], max
             if snippet and snippet not in snippets:
                 snippets.append(snippet)
     return contexts
+
+
+# Public notebook API -------------------------------------------------------
+
+def walk_document(doc) -> list[TextUnit]:
+    """Walk body paragraphs, every table cell's paragraphs, headers, footers.
+    Merge adjacent runs into single text per unit before returning.
+    """
+    return iter_text_units(doc, include_headers_footers=True)
+
+
+def find_occurrences(text_units: list[TextUnit], placeholders: dict[str, str]) -> list[Occurrence]:
+    """Regex-scan TextUnits for [PlaceholderName] matches present in placeholders."""
+    occurrences: list[Occurrence] = []
+    counts: dict[str, int] = {}
+    wanted = set(placeholders)
+    for unit in text_units:
+        for match in PLACEHOLDER_RE.finditer(unit.text or ""):
+            key = match_key(match)
+            if key not in wanted:
+                continue
+            index = counts.get(key, 0)
+            counts[key] = index + 1
+            context = context_snippet(unit.text, match)
+            occurrences.append(Occurrence(
+                placeholder=key,
+                occurrence_index=index,
+                original_value=str(placeholders[key]),
+                source_type=unit.source_type,
+                source_path=unit.source_path,
+                context_text=context,
+                context=context,
+                context_with_value=context.replace(match.group(0), str(placeholders[key]), 1),
+                literal_placeholder=match.group(0),
+            ))
+    return occurrences
+
+
+def sanity_check(text_units: list[TextUnit], occurrences: list[Occurrence]) -> tuple[bool, list[str]]:
+    """Compare raw placeholder regex matches across all text_units against len(occurrences)."""
+    raw_count = sum(1 for unit in text_units for _ in PLACEHOLDER_RE.finditer(unit.text or ""))
+    occurrence_count = len(occurrences)
+    if raw_count == occurrence_count:
+        return True, []
+    return False, [f"raw placeholder regex matches={raw_count}, occurrences={occurrence_count}"]

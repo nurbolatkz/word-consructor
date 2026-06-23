@@ -1,5 +1,23 @@
-"""UseAI placeholder correction pipeline."""
+"""Notebook-friendly UseAI correction API."""
 
-from .pipeline import correct_slot_values, startup_health
+from .engine import CorrectionEngine
+from .extraction import find_occurrences, sanity_check, walk_document
+from .morphology import DefaultMorphology, KazakhAwareMorphology
+from .rules import GoverningPhraseRules, load_rules
+from .testing import FakeOpenAIClient
+from .types import CorrectionResult, Occurrence, TextUnit
 
-__all__ = ["correct_slot_values", "startup_health"]
+__all__ = [
+    "CorrectionEngine",
+    "walk_document",
+    "find_occurrences",
+    "sanity_check",
+    "load_rules",
+    "GoverningPhraseRules",
+    "DefaultMorphology",
+    "KazakhAwareMorphology",
+    "FakeOpenAIClient",
+    "TextUnit",
+    "Occurrence",
+    "CorrectionResult",
+]

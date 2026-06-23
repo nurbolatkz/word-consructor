@@ -15,8 +15,8 @@ from .extraction import (
     sanity_check_occurrence_counts,
 )
 from .openai_client import request_ai_placeholder_corrections
-from .rules import load_rules, rules_health
-from .types import CorrectionResult
+from .rules import load_rules_config, rules_health
+from .types import PipelineCorrectionResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +36,11 @@ def correct_slot_values(
     log_key: str | None = None,
     call_log: dict[str, Any] | None = None,
     timeout_seconds: float = 8.0,
-) -> CorrectionResult:
+) -> PipelineCorrectionResult:
     if not slot_values:
-        return CorrectionResult(slot_values, {})
+        return PipelineCorrectionResult(slot_values, {})
 
-    rules = load_rules()
+    rules = load_rules_config()
     occurrences = extract_placeholder_occurrences(doc, slot_values, rules)
     sanity = sanity_check_occurrence_counts(doc, slot_values, occurrences)
     sanity_payload = {
@@ -76,7 +76,7 @@ def correct_slot_values(
         )
         if call_log is not None:
             call_log["error"] = "placeholder occurrence mismatch; AI correction skipped"
-        return CorrectionResult(slot_values, {}, occurrences, sanity_payload, "placeholder_occurrence_mismatch")
+        return PipelineCorrectionResult(slot_values, {}, occurrences, sanity_payload, "placeholder_occurrence_mismatch")
 
     logger.debug(
         "UseAI placeholder occurrence count check passed: found %s raw [Placeholder] regex matches and added %s occurrences: %s",
@@ -127,4 +127,4 @@ def correct_slot_values(
             occurrence_values[occurrence_keys[correction_id]] = str(corrected)
 
     apply_deterministic_case_hints(occurrence_values, occurrences, decline_func, rules)
-    return CorrectionResult(slot_values, occurrence_values, occurrences, sanity_payload)
+    return PipelineCorrectionResult(slot_values, occurrence_values, occurrences, sanity_payload)

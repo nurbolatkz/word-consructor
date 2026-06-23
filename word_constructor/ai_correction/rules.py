@@ -8,6 +8,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+@dataclass(frozen=True)
+class GoverningPhraseRule:
+    id: str
+    pattern: str
+    case: str
+
+
+@dataclass(frozen=True)
+class GoverningPhraseRules:
+    version: int
+    name_case_rules: list[GoverningPhraseRule]
+    business_abbreviations: set[str]
+    preserve_abbreviations: set[str]
+    department_name_patterns: list[str]
+
 DEFAULT_RULES_PATH = Path(os.environ.get("AI_GOVERNING_RULES_PATH", "config/ai_governing_phrases.json"))
 
 DEFAULT_RULES: dict[str, Any] = {
@@ -27,6 +43,7 @@ DEFAULT_RULES: dict[str, Any] = {
         ".*Code.*",
         ".*Number.*",
     ],
+    "preserve_abbreviations": ["ВОАД", "АУП", "КПП"],
     "governing_phrases": [
         {"id": "contract_number_after_no", "placeholder_name_pattern": ".*", "context_pattern": "(?:№|номер\\s+)\\s*\\[{placeholder}\\]", "behavior": "preserve"},
         {"id": "date_ot_goda", "placeholder_name_pattern": ".*(Дата|Date).*", "context_pattern": "(?:^|\\s)от\\s+\\[{placeholder}\\]\\s*(?:года|г\\.|год)(?:\\s|$|[.,;:])", "behavior": "date_ru_no_year_word"},
@@ -81,7 +98,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def load_rules(force: bool = False) -> RulesConfig:
+def load_rules_config(force: bool = False) -> RulesConfig:
     global _CACHE
     path = _current_path()
     try:
@@ -107,8 +124,42 @@ def load_rules(force: bool = False) -> RulesConfig:
         return cfg
 
 
+
+def _to_public_rules(data: dict[str, Any]) -> GoverningPhraseRules:
+    name_rules: list[GoverningPhraseRule] = []
+    for item in data.get("governing_phrases") or []:
+        if not isinstance(item, dict):
+            continue
+        case = str(item.get("case") or item.get("behavior") or "")
+        if case in {"gent", "datv", "accs", "nomn", "loct", "ablt"}:
+            name_rules.append(GoverningPhraseRule(
+                id=str(item.get("id") or ""),
+                pattern=str(item.get("context_pattern") or item.get("pattern") or ""),
+                case=case,
+            ))
+    dept = data.get("department_name_rules") or {}
+    preserve = set(str(item) for item in data.get("preserve_abbreviations") or [])
+    return GoverningPhraseRules(
+        version=int(data.get("version") or 1),
+        name_case_rules=name_rules,
+        business_abbreviations=set(str(v) for v in (data.get("business_abbreviations") or {}).values()),
+        preserve_abbreviations=preserve,
+        department_name_patterns=[str(item) for item in dept.get("placeholder_name_patterns") or []],
+    )
+
+
+def load_rules(path: str | None = None) -> GoverningPhraseRules:
+    """Load and validate config/ai_governing_phrases.json for notebook/engine use."""
+    if path is None:
+        return _to_public_rules(load_rules_config().data)
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("rules file root must be a JSON object")
+    return _to_public_rules(_merge_defaults(raw))
+
+
 def rules_health() -> dict[str, Any]:
-    cfg = load_rules()
+    cfg = load_rules_config()
     return {
         "ai_rules_loaded": cfg.loaded,
         "ai_rules_path": cfg.path,
@@ -129,23 +180,23 @@ def _matches_any(patterns: list[str], value: str) -> bool:
 
 
 def is_department_placeholder(key: str, cfg: RulesConfig | None = None) -> bool:
-    cfg = cfg or load_rules()
+    cfg = cfg or load_rules_config()
     rules = cfg.data.get("department_name_rules") or {}
     return _matches_any(list(rules.get("placeholder_name_patterns") or []), key or "")
 
 
 def department_rule(cfg: RulesConfig | None = None) -> dict[str, Any]:
-    cfg = cfg or load_rules()
+    cfg = cfg or load_rules_config()
     return dict(cfg.data.get("department_name_rules") or {})
 
 
 def business_abbreviations(cfg: RulesConfig | None = None) -> dict[str, str]:
-    cfg = cfg or load_rules()
+    cfg = cfg or load_rules_config()
     raw = cfg.data.get("business_abbreviations") or {}
     return {str(k).lower(): str(v) for k, v in raw.items()}
 
 
 def governing_phrases(cfg: RulesConfig | None = None) -> list[dict[str, Any]]:
-    cfg = cfg or load_rules()
+    cfg = cfg or load_rules_config()
     raw = cfg.data.get("governing_phrases") or []
     return [item for item in raw if isinstance(item, dict)]

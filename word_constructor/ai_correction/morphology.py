@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Callable
+from typing import Callable, Protocol
 
 KAZAKH_SPECIFIC_RE = re.compile(r"[ҚқҒғҰұҮүҢңҺһӘәӨөІі]")
 KAZAKH_PATRONYMIC_SUFFIXES = ("ұлы", "улы", "қызы", "кизы")
@@ -75,3 +75,30 @@ def decline_value(value: str, case: str, decline_func: Callable[[str, str], str]
     declined = decline_func(value, case)
     declined = fix_common_feminine_surname_case(value, declined, case)
     return preserve_kazakh_patronymic_suffixes(value, declined)
+
+
+class MorphologyProvider(Protocol):
+    def decline(self, full_name: str, case: str) -> str: ...
+
+
+class DefaultMorphology:
+    """Wraps the existing morphology helper plus Slavic feminine-surname fallback."""
+
+    def __init__(self, decline_func: Callable[[str, str], str] | None = None):
+        if decline_func is None:
+            from word_constructor.transforms import склонить as decline_func
+        self._decline_func = decline_func
+
+    def decline(self, full_name: str, case: str) -> str:
+        declined = self._decline_func(full_name, case)
+        declined = fix_common_feminine_surname_case(full_name, declined, case)
+        return preserve_kazakh_patronymic_suffixes(full_name, declined)
+
+
+class KazakhAwareMorphology(DefaultMorphology):
+    """Conservative Kazakh-name declension with patronymic suffix preservation."""
+
+    def decline(self, full_name: str, case: str) -> str:
+        if has_kazakh_pattern(full_name):
+            return conservative_decline_kazakh_name(full_name, case, self._decline_func)
+        return super().decline(full_name, case)
