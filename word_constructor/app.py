@@ -67,11 +67,7 @@ from word_constructor.ai_correction.extraction import (
     raw_placeholder_matches_from_doc as _ai_raw_placeholder_matches_from_doc,
     sanity_check_occurrence_counts as _ai_sanity_check_occurrence_counts,
 )
-from word_constructor.ai_correction.openai_client import (
-    openai_placeholder_payload as _ai_openai_placeholder_payload,
-    parse_openai_chat_content as _ai_parse_openai_chat_content,
-    request_ai_placeholder_corrections as _ai_request_ai_placeholder_corrections,
-)
+from word_constructor.ai_correction.openai_client import parse_openai_chat_content as _ai_parse_openai_chat_content
 from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
 from word_constructor.ai_correction.pipeline import startup_health as ai_correction_startup_health
 
