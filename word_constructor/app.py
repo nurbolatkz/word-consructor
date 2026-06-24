@@ -739,6 +739,7 @@ def _ai_correct_slot_values(
     Claude wins on any per-occurrence disagreement with GPT.
     """
     import concurrent.futures
+    import time
 
     if not slot_values:
         return slot_values, {}, ""
@@ -756,50 +757,62 @@ def _ai_correct_slot_values(
     claude_ran = False
     gpt_result = None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2 if claude_is_available else 1) as pool:
-        gpt_future = pool.submit(
-            _ai_pipeline_correct_slot_values,
-            doc, slot_values, prompt_ai,
-            log_key=log_key,
-            call_log=call_log,
-            timeout_seconds=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS,
-            _precomputed_occurrences=occurrences,
-            _precomputed_full_text=full_text,
+    # Use explicit shutdown(wait=False) so the pool never blocks the request thread.
+    # Both futures start immediately (max_workers=2). After GPT finishes we give
+    # Claude a short grace window; if it is still running we skip its result and
+    # return to the caller without waiting for its thread to complete.
+    _t_submit = time.time()
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    gpt_future = pool.submit(
+        _ai_pipeline_correct_slot_values,
+        doc, slot_values, prompt_ai,
+        log_key=log_key,
+        call_log=call_log,
+        timeout_seconds=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS,
+        _precomputed_occurrences=occurrences,
+        _precomputed_full_text=full_text,
+    )
+
+    # Claude starts at the same time as GPT — fully independent
+    claude_future = pool.submit(
+        _ai_claude_correct_occurrences,
+        full_text, occurrences, {},
+        prompt_ai, None, log_key, call_log,
+        0,    # max_retries — no retry, fail fast
+        45.0, # timeout_seconds (SDK-level)
+    ) if claude_is_available else None
+
+    # Detach threads — do NOT block on pool shutdown.
+    pool.shutdown(wait=False)
+
+    try:
+        gpt_result = gpt_future.result(timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS + 5)
+        gpt_occurrence_values = gpt_result.occurrence_values
+        for (key, _occ1), val in gpt_occurrence_values.items():
+            gpt_per_key[key] = val
+    except Exception as exc:
+        logger.exception(
+            "GPT placeholder correction failed; using original values: use_ai_log_key=%s error=%s",
+            log_key, exc,
         )
+        if call_log is not None:
+            call_log["error"] = f"GPT correction failed: {exc}"
+        return slot_values, {}, ""
 
-        # Claude gets original occurrences with no GPT pre-answer — fully independent
-        claude_future = pool.submit(
-            _ai_claude_correct_occurrences,
-            full_text, occurrences, {},
-            prompt_ai, None, log_key, call_log,
-        ) if claude_is_available else None
-
+    if claude_future:
+        # How long has Claude already been running alongside GPT?
+        elapsed = time.time() - _t_submit
+        # Give Claude at most 15 s after GPT finishes (total cap ~45s from submit)
+        grace = max(2.0, 45.0 - elapsed)
         try:
-            gpt_result = gpt_future.result(timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS + 10)
-            gpt_occurrence_values = gpt_result.occurrence_values
-            for (key, _occ1), val in gpt_occurrence_values.items():
-                gpt_per_key[key] = val
+            claude_corrections, review_summary = claude_future.result(timeout=grace)
+            claude_ran = True
         except Exception as exc:
-            logger.exception(
-                "GPT placeholder correction failed; using original values: use_ai_log_key=%s error=%s",
+            logger.warning(
+                "Claude correction pass failed; using GPT output: use_ai_log_key=%s error=%r",
                 log_key, exc,
             )
-            if call_log is not None:
-                call_log["error"] = f"GPT correction failed: {exc}"
-            if claude_future:
-                claude_future.cancel()
-            return slot_values, {}, ""
-
-        if claude_future:
-            try:
-                claude_corrections, review_summary = claude_future.result(timeout=30)
-                claude_ran = True
-            except Exception as exc:
-                logger.warning(
-                    "Claude correction pass failed; using GPT output: use_ai_log_key=%s error=%s",
-                    log_key, exc,
-                )
-                review_summary = "Проверка Claude недоступна; применены исправления GPT."
+            review_summary = f"Проверка Claude недоступна ({type(exc).__name__}: {exc}); применены исправления GPT."
 
     # Merge: Claude wins per occurrence
     final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}

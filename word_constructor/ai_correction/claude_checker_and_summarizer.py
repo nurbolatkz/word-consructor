@@ -217,6 +217,7 @@ def claude_correct_occurrences(
     log_key: str | None = None,
     call_log: dict[str, Any] | None = None,
     max_retries: int = 1,
+    timeout_seconds: float = 50.0,
 ) -> tuple[dict[tuple[str, int], str], str]:
     """Independent Claude correction pass over all occurrences.
 
@@ -275,6 +276,7 @@ def claude_correct_occurrences(
                 system=CLAUDE_OCCURRENCE_CORRECTION_PROMPT,
                 messages=[{"role": "user", "content": body}],
                 temperature=0,
+                timeout=timeout_seconds,
             )
             raw_text = _response_text(response)
             logger.info("Claude occurrence response: log_key=%s text=%s", log_key, raw_text[:500])
