@@ -71,14 +71,13 @@ def run_gpt(full_text, occurrences, rules, slot_values, prompt_ai):
     )
 
 
-def run_claude(full_text, occurrences, prompt_ai):
+def run_claude(full_text, slot_values, prompt_ai):
     from word_constructor.ai_correction.claude_checker_and_summarizer import (
-        claude_correct_occurrences,
+        claude_correct_values,
     )
-    return claude_correct_occurrences(
+    return claude_correct_values(
         full_text=full_text,
-        occurrences=occurrences,
-        gpt_occurrence_values={},
+        slot_values=slot_values,
         prompt_ai=prompt_ai,
         log_key="test-run",
         timeout_seconds=60.0,
@@ -115,7 +114,7 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         gpt_future = pool.submit(run_gpt, full_text, occurrences, rules, slot_values, prompt_ai)
-        claude_future = pool.submit(run_claude, full_text, occurrences, prompt_ai) if claude_available() else None
+        claude_future = pool.submit(run_claude, full_text, slot_values, prompt_ai) if claude_available() else None
 
         # GPT
         t_gpt = time.perf_counter()
@@ -132,8 +131,7 @@ def main():
             t_cl = time.perf_counter()
             try:
                 cl_raw, claude_summary = claude_future.result(timeout=75)
-                for (k, _occ1), v in cl_raw.items():
-                    claude_per_key[k] = v
+                claude_per_key = cl_raw  # already dict[str, str]
                 print(f"[Claude] done  {(time.perf_counter()-t_cl)*1000:.0f} ms  —  {len(claude_per_key)} values overridden")
             except Exception as exc:
                 print(f"[Claude] FAILED {(time.perf_counter()-t_cl)*1000:.0f} ms  —  {type(exc).__name__}: {exc}")

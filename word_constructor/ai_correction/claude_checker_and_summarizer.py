@@ -13,7 +13,8 @@ except Exception:  # pragma: no cover - optional dependency
     _ANTHROPIC_AVAILABLE = False
 
 from .claude_checker import claude_available, claude_summarize_review_queue
-from .openai_client import SYSTEM_PROMPT as _GPT_CORRECTION_RULES
+from .openai_client import SYSTEM_PROMPT as _GPT_CORRECTION_RULES, _rules_context
+from .rules import load_rules_config
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,73 @@ def _client() -> Any:
     if not _ANTHROPIC_AVAILABLE or Anthropic is None:
         raise RuntimeError("anthropic package is not installed")
     return Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY") or None)
+
+
+def claude_correct_values(
+    full_text: str,
+    slot_values: dict[str, str],
+    prompt_ai: str = "",
+    model: str | None = None,
+    log_key: str | None = None,
+    call_log: dict[str, Any] | None = None,
+    timeout_seconds: float = 45.0,
+) -> tuple[dict[str, str], str]:
+    """Simple correction mirror of GPT: send {template, placeholders} → {key: corrected_value}.
+
+    Uses the same SYSTEM_PROMPT as GPT so both models follow identical rules.
+    Returns (corrected_dict, summary_note).
+    """
+    model = model or os.environ.get(
+        "ANTHROPIC_CLAUDE_CORRECTION_MODEL",
+        os.environ.get("ANTHROPIC_CHECKER_MODEL", "claude-sonnet-4-6"),
+    )
+
+    rules_ctx = _rules_context(load_rules_config())
+    system = _GPT_CORRECTION_RULES
+    if rules_ctx:
+        system += "\n\nSystem rules from configuration:\n" + rules_ctx
+
+    payload: dict[str, Any] = {
+        "template": full_text,
+        "placeholders": {str(k): str(v) for k, v in slot_values.items()},
+    }
+    if prompt_ai:
+        payload["additional_instructions"] = str(prompt_ai)
+
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    logger.info("Claude correction: log_key=%s placeholders=%d model=%s", log_key, len(slot_values), model)
+    if call_log is not None:
+        call_log.setdefault("claude_pass", {}).update({"model": model, "placeholder_count": len(slot_values)})
+
+    response = _client().messages.create(
+        model=model,
+        max_tokens=4000,
+        system=system,
+        messages=[{"role": "user", "content": body}],
+        temperature=0,
+        timeout=timeout_seconds,
+    )
+    raw = _response_text(response)
+    logger.info("Claude correction response: log_key=%s text=%s", log_key, raw[:300])
+
+    if not raw:
+        raise ValueError("Claude returned an empty response")
+
+    parsed = json.loads(_strip_json_fence(raw))
+    if not isinstance(parsed, dict):
+        raise ValueError("Claude response is not a JSON object")
+
+    corrected = {str(k): str(v) for k, v in parsed.items() if k in slot_values}
+    missing = sorted(set(slot_values) - set(corrected))
+    if missing:
+        logger.warning("Claude missing keys: log_key=%s missing=%s", log_key, missing)
+        for k in missing:
+            corrected[k] = slot_values[k]
+
+    summary = "Claude проверил все значения."
+    if call_log is not None:
+        call_log["claude_pass"]["done"] = True
+    return corrected, summary
 
 
 def _schema_for_keys(keys: list[str]) -> dict[str, Any]:

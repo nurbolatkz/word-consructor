@@ -54,7 +54,7 @@ from word_constructor.ai_correction.extraction import (
     match_key as _ai_match_key,
 )
 from word_constructor.ai_correction.claude_checker import claude_available as _ai_claude_available
-from word_constructor.ai_correction.claude_checker_and_summarizer import claude_correct_occurrences as _ai_claude_correct_occurrences
+from word_constructor.ai_correction.claude_checker_and_summarizer import claude_correct_values as _ai_claude_correct_values
 from word_constructor.ai_correction.openai_client import parse_openai_chat_content as _ai_parse_openai_chat_content
 from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
 from word_constructor.ai_correction.pipeline import startup_health as ai_correction_startup_health
@@ -752,15 +752,12 @@ def _ai_correct_slot_values(
 
     gpt_occurrence_values: dict[tuple[str, int], str] = {}
     gpt_per_key: dict[str, str] = {}
-    claude_corrections: dict[tuple[str, int], str] = {}
+    claude_per_key: dict[str, str] = {}
     review_summary = ""
     claude_ran = False
     gpt_result = None
 
-    # Use explicit shutdown(wait=False) so the pool never blocks the request thread.
-    # Both futures start immediately (max_workers=2). After GPT finishes we give
-    # Claude a short grace window; if it is still running we skip its result and
-    # return to the caller without waiting for its thread to complete.
+    # Submit both to a detached pool so neither thread blocks the request.
     _t_submit = time.time()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     gpt_future = pool.submit(
@@ -773,17 +770,15 @@ def _ai_correct_slot_values(
         _precomputed_full_text=full_text,
     )
 
-    # Claude starts at the same time as GPT — fully independent
+    # Claude mirrors GPT: same payload {template, placeholders} → {key: value}
     claude_future = pool.submit(
-        _ai_claude_correct_occurrences,
-        full_text, occurrences, {},
+        _ai_claude_correct_values,
+        full_text, slot_values,
         prompt_ai, None, log_key, call_log,
-        0,    # max_retries — no retry, fail fast
-        45.0, # timeout_seconds (SDK-level)
+        45.0,  # timeout_seconds (SDK-level)
     ) if claude_is_available else None
 
-    # Detach threads — do NOT block on pool shutdown.
-    pool.shutdown(wait=False)
+    pool.shutdown(wait=False)  # never block the request thread on thread completion
 
     try:
         gpt_result = gpt_future.result(timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS + 5)
@@ -800,12 +795,10 @@ def _ai_correct_slot_values(
         return slot_values, {}, ""
 
     if claude_future:
-        # How long has Claude already been running alongside GPT?
         elapsed = time.time() - _t_submit
-        # Give Claude at most 15 s after GPT finishes (total cap ~45s from submit)
         grace = max(2.0, 45.0 - elapsed)
         try:
-            claude_corrections, review_summary = claude_future.result(timeout=grace)
+            claude_per_key, review_summary = claude_future.result(timeout=grace)
             claude_ran = True
         except Exception as exc:
             logger.warning(
@@ -814,11 +807,15 @@ def _ai_correct_slot_values(
             )
             review_summary = f"Проверка Claude недоступна ({type(exc).__name__}: {exc}); применены исправления GPT."
 
-    # Merge: Claude wins per occurrence
-    final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}
-    final_per_key = dict(gpt_per_key)
-    for (key, _occ1), val in final_occurrence_values.items():
-        final_per_key[key] = val
+    # Merge: GPT base, Claude wins on disagreement
+    final_per_key = {**gpt_per_key, **claude_per_key}
+    # Rebuild occurrence_values from merged per-key result
+    final_occurrence_values: dict[tuple[str, int], str] = {}
+    for o in occurrences:
+        key = str(o.get("key") or "")
+        occ = int(o.get("occurrence") or 0)
+        if key and occ and key in final_per_key:
+            final_occurrence_values[(key, occ)] = final_per_key[key]
 
     # Changes where Claude's answer differs from GPT's
     changes_from_gpt = [
