@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_DB_PATH = "/tmp/kazuni_word_constructor/admin_review.sqlite3"
-VALID_STATUSES = {"pending", "approved", "rejected"}
+VALID_STATUSES = {"pending", "approved", "rejected", "logged"}
 
 
 class ClosingConnection(sqlite3.Connection):

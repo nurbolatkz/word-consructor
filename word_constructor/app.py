@@ -1573,6 +1573,18 @@ def _request_ai_placeholder_corrections(
     return corrections
 
 
+def _is_non_trivial_ai_change(original: str, corrected: str) -> bool:
+    """True when the GPT change is more substantive than date-format rewriting or pure casing."""
+    if original == corrected:
+        return False
+    if original.lower() == corrected.lower():
+        return False
+    import re as _re
+    if _re.match(r"^\d{1,2}[.\-/]\d{2}[.\-/]\d{4}$", original.strip()):
+        return False
+    return True
+
+
 def _ai_correct_slot_values(
     doc: Document,
     slot_values: dict[str, str],
@@ -1622,6 +1634,7 @@ def _ai_correct_slot_values(
     full_text = _ai_document_full_text(doc)
     changes_from_gpt: list[dict[str, str]] = []
     final_per_key = dict(gpt_per_key)
+    claude_ran = False
 
     if _ai_claude_available():
         try:
@@ -1633,6 +1646,7 @@ def _ai_correct_slot_values(
                 log_key=log_key,
                 call_log=call_log,
             )
+            claude_ran = True
             # Claude wins on disagreement
             final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}
             for (key, _occ1), val in final_occurrence_values.items():
@@ -1654,6 +1668,18 @@ def _ai_correct_slot_values(
             )
             review_summary = "Проверка Claude недоступна; применены исправления GPT."
 
+    # Triage rule: "pending" when human review has value; "logged" when correction is routine.
+    # pending if: Claude disagreed with GPT, OR Claude didn't run and GPT made a non-trivial change.
+    # logged if: Claude ran and agreed (doubly validated), OR only trivial changes (dates/casing).
+    if changes_from_gpt:
+        item_status = "pending"
+    elif claude_ran:
+        item_status = "logged"
+    elif any(_is_non_trivial_ai_change(str(slot_values.get(k, "")), v) for k, v in gpt_per_key.items()):
+        item_status = "pending"
+    else:
+        item_status = "logged"
+
     # Always persist to review queue after any AI correction run (not gated on review_needed or Claude)
     try:
         claude_result_for_log = {
@@ -1671,6 +1697,7 @@ def _ai_correct_slot_values(
             document=full_text,
             document_name=str((call_log or {}).get("document_name") or (call_log or {}).get("filename") or ""),
             log_key=log_key or "",
+            status=item_status,
         )
     except Exception as persist_exc:
         logger.warning("Failed to persist AI correction to review queue: use_ai_log_key=%s error=%s", log_key, persist_exc)

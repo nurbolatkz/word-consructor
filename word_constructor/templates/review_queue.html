@@ -13,6 +13,10 @@
     h1 { margin:0; font-size:24px; }
     .back { text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; color:var(--accent); background:var(--surface); }
     .back:hover { background:var(--bg); }
+    .filter-bar { display:flex; align-items:center; gap:10px; margin-bottom:14px; font-size:13px; }
+    .filter-bar a { text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:5px 12px; font-size:13px; font-weight:600; color:var(--accent); background:var(--surface); }
+    .filter-bar a.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .filter-bar a:hover:not(.active) { background:var(--bg); }
     .panel { background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:16px; }
     table { width:100%; border-collapse:collapse; }
     th, td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:13px; }
@@ -22,6 +26,7 @@
     .status-pending  { color:var(--warn); font-weight:700; }
     .status-approved { color:var(--ok);   font-weight:700; }
     .status-rejected { color:var(--err);  font-weight:700; }
+    .status-logged   { color:var(--muted); font-size:12px; }
     button { border:1px solid var(--accent); border-radius:8px; padding:6px 12px; font-size:13px; font-weight:700; cursor:pointer; }
     button.approve { background:var(--ok);  color:#fff; border-color:var(--ok); }
     button.reject  { background:var(--err); color:#fff; border-color:var(--err); margin-left:6px; }
@@ -36,6 +41,13 @@
       <h1>AI Review Queue</h1>
       <a class="back" href="/services/word-constructor/admin/cabinet">← Admin cabinet</a>
     </div>
+
+    <div class="filter-bar">
+      <a href="/admin/review" class="{{ 'active' if not show_all else '' }}">Pending only</a>
+      <a href="/admin/review?show_all=1" class="{{ 'active' if show_all else '' }}">All ({{ total_count }})</a>
+      <span style="color:var(--muted)">{{ items | length }} item{{ 's' if items | length != 1 else '' }} shown</span>
+    </div>
+
     <div class="panel">
       <table>
         <thead>
@@ -61,12 +73,16 @@
             <td><pre>{{ item.rendered_preview }}</pre></td>
             <td><pre>{{ item.corrections | tojson(indent=2) }}</pre></td>
             <td style="white-space:nowrap">
+              {% if item.status == 'pending' %}
               <button class="approve" type="button" onclick="submitReview('{{ item.id }}', 'approved')">Approve</button>
               <button class="reject"  type="button" onclick="submitReview('{{ item.id }}', 'rejected')">Reject</button>
+              {% else %}
+              <span style="color:var(--muted);font-size:12px">{{ item.status }}</span>
+              {% endif %}
             </td>
           </tr>
           {% else %}
-          <tr class="empty"><td colspan="8">No review items.</td></tr>
+          <tr class="empty"><td colspan="8">{% if show_all %}No review items yet.{% else %}No pending items. <a href="/admin/review?show_all=1">View all logged items.</a>{% endif %}</td></tr>
           {% endfor %}
         </tbody>
       </table>

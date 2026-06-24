@@ -42,7 +42,17 @@ class NormalizeLeadingSlashesMiddleware:
 
 
 def _start_pattern_analyzer_background(interval_seconds: int = 3600) -> None:
-    """Start a daemon thread that runs the pattern analyzer once per interval."""
+    """Start a daemon thread that runs the pattern analyzer once per interval.
+
+    Only starts when ENABLE_BACKGROUND_ANALYZER=true. This prevents the thread
+    from spawning in every gunicorn worker (currently 2) and double-processing
+    the same log entries. Set the env var on a single process/replica only.
+    Use POST /admin/run-analysis for manual or cron-driven scheduling instead.
+    """
+    if os.environ.get("ENABLE_BACKGROUND_ANALYZER", "").lower() not in ("1", "true", "yes"):
+        logger.info("Pattern analyzer background thread disabled (ENABLE_BACKGROUND_ANALYZER not set)")
+        return
+
     def _loop() -> None:
         # Wait one interval before the first run so startup logs stay clean
         time.sleep(interval_seconds)
@@ -57,6 +67,7 @@ def _start_pattern_analyzer_background(interval_seconds: int = 3600) -> None:
 
     t = threading.Thread(target=_loop, daemon=True, name="pattern-analyzer")
     t.start()
+    logger.info("Pattern analyzer background thread started (interval=%ds)", interval_seconds)
 
 
 def create_app() -> Flask:

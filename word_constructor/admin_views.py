@@ -46,6 +46,7 @@ def build_review_item_from_check(
     checker_result: dict[str, Any] | Any,
     corrections: list[dict[str, Any]],
     rendered_preview: str,
+    status: str = "pending",
 ) -> dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
@@ -55,7 +56,7 @@ def build_review_item_from_check(
         "checker_result": _as_dict(checker_result),
         "corrections": corrections or [],
         "rendered_preview": str(rendered_preview or ""),
-        "status": "pending",
+        "status": status,
         "decided_at": None,
     }
 
@@ -100,12 +101,14 @@ def _persist_background_review_log(review_payload: dict[str, Any]) -> dict[str, 
         "claude_result": review_payload.get("claude_result") or {},
         "review_summary": review_summary,
     }
+    status = str(review_payload.get("status") or "pending")
     item = build_review_item_from_check(
         document_name=str(review_payload.get("document_name") or ""),
         log_key=str(review_payload.get("log_key") or ""),
         checker_result=checker_result,
         corrections=list(review_payload.get("corrections") or []),
         rendered_preview=str(review_payload.get("rendered_preview") or ""),
+        status=status,
     )
     return insert_review_item(item)
 
@@ -118,6 +121,7 @@ def enqueue_background_review_log(
     *,
     document_name: str = "",
     log_key: str = "",
+    status: str = "pending",
 ) -> threading.Thread:
     review_payload = {
         "document_name": document_name,
@@ -127,6 +131,7 @@ def enqueue_background_review_log(
         "claude_result": claude_result,
         "rendered_preview": document,
         "corrections": (claude_result.get("review_summary") or {}).get("changes_from_gpt", []),
+        "status": status,
     }
     worker = threading.Thread(target=_persist_background_review_log, args=(review_payload,), daemon=True)
     worker.start()
@@ -142,7 +147,11 @@ def _status_from_request() -> str:
 
 @admin_reviews.get("/review")
 def review_queue_page():
-    return render_template("review_queue.html", items=load_review_items())
+    from flask import request as _req
+    show_all = _req.args.get("show_all") == "1"
+    all_items = load_review_items()
+    items = all_items if show_all else [i for i in all_items if i.get("status") == "pending"]
+    return render_template("review_queue.html", items=items, show_all=show_all, total_count=len(all_items))
 
 
 @admin_reviews.post("/review/<item_id>/decide")
