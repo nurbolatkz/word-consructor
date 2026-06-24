@@ -5,90 +5,20 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable
-
-from .claude_checker_and_summarizer import claude_correct_and_review
+from typing import Any
 
 from docx import Document
 
 from . import log_store
 from .extraction import document_full_text, extract_placeholder_occurrences
-from .openai_client import request_ai_corrections, _known_pitfalls_for_contexts
+from .openai_client import request_ai_corrections
 from .rules import load_rules_config, rules_health
 from .types import PipelineCorrectionResult
-from .verifier import contexts_from_occurrences, render_preview
 
 logger = logging.getLogger(__name__)
 
 
 
-
-def correct_document_two_model(
-    doc: Document,
-    slot_values: dict[str, str],
-    prompt_ai: str,
-    log_key: str | None = None,
-    call_log: dict[str, Any] | None = None,
-    timeout_seconds: float = 30.0,
-) -> dict[str, Any]:
-    occurrences = extract_placeholder_occurrences(doc, slot_values)
-    full_text = document_full_text(doc)
-    rules = load_rules_config()
-
-    gpt_occurrence_corrections = request_ai_corrections(
-        full_text=full_text,
-        occurrences=occurrences,
-        rules=rules,
-        prompt_ai=prompt_ai,
-        placeholders=slot_values,
-        log_key=log_key,
-        call_log=call_log,
-        timeout_seconds=timeout_seconds,
-        persist_review_item=False,
-        apply_verification_fallbacks=False,
-    )
-    gpt_response: dict[str, str] = {}
-    for item in occurrences:
-        placeholder = str(item.get("key") or item.get("placeholder") or "").strip()
-        if not placeholder:
-            continue
-        try:
-            occ_idx = int(item.get("occurrence_index", 0))
-        except (TypeError, ValueError):
-            continue
-        corrected = gpt_occurrence_corrections.get((placeholder, occ_idx))
-        if corrected is not None:
-            gpt_response[placeholder] = str(corrected)
-    original_params = {"template": full_text, "placeholders": dict(slot_values)}
-    verifier_contexts = contexts_from_occurrences(occurrences, gpt_response)
-    known_pitfalls = _known_pitfalls_for_contexts(verifier_contexts)
-    claude_result = claude_correct_and_review(original_params, gpt_response, known_pitfalls=known_pitfalls)
-    final_values = claude_result["corrected_values"]
-
-    rendered_preview = render_preview(full_text, final_values)
-    review_payload = {
-        "document_name": str((call_log or {}).get("document_name") or (call_log or {}).get("filename") or ""),
-        "log_key": log_key or "",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "original_params": original_params,
-        "gpt_response": gpt_response,
-        "claude_result": claude_result,
-        "rendered_preview": rendered_preview,
-        "corrections": claude_result.get("review_summary", {}).get("changes_from_gpt", []),
-    }
-
-    if call_log is not None:
-        call_log["gpt_response"] = gpt_response
-        call_log["claude_result"] = claude_result
-        call_log["rendered_preview"] = rendered_preview
-
-    return {
-        "final_values": final_values,
-        "gpt_response": gpt_response,
-        "claude_result": claude_result,
-        "review_payload": review_payload,
-        "occurrences": occurrences,
-    }
 
 
 def startup_health() -> dict[str, Any]:
@@ -101,8 +31,6 @@ def correct_slot_values(
     doc: Document,
     slot_values: dict[str, str],
     prompt_ai: str,
-    decline_func: Callable | None = None,  # kept for API compatibility, no longer used
-    raw_ai_values: dict[str, Any] | None = None,  # kept for API compatibility, no longer used
     log_key: str | None = None,
     call_log: dict[str, Any] | None = None,
     timeout_seconds: float = 30.0,
@@ -135,7 +63,7 @@ def correct_slot_values(
             occurrences=occurrences,
             rules=rules,
             prompt_ai=prompt_ai,
-            placeholders=raw_ai_values or slot_values,
+            placeholders=slot_values,
             log_key=log_key,
             call_log=call_log,
             timeout_seconds=timeout_seconds,

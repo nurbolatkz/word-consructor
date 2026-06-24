@@ -44,7 +44,7 @@ import jwt
 from docx import Document
 from flask import Blueprint, abort, g, jsonify, redirect, render_template, request, send_file, session
 
-from word_constructor.transforms import apply_transform, get_transforms, склонить
+from word_constructor.transforms import apply_transform, get_transforms
 
 from word_constructor.ai_correction.deterministic import (
     format_ru_date_no_year_word as _format_ru_date_no_year_word_new,
@@ -71,7 +71,6 @@ from word_constructor.ai_correction.extraction import (
 from word_constructor.ai_correction.claude_checker import claude_available as _ai_claude_available
 from word_constructor.ai_correction.claude_checker_and_summarizer import claude_correct_occurrences as _ai_claude_correct_occurrences
 from word_constructor.ai_correction.openai_client import parse_openai_chat_content as _ai_parse_openai_chat_content
-from word_constructor.ai_correction.pipeline import correct_document_two_model as _ai_pipeline_correct_document_two_model
 from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
 from word_constructor.ai_correction.pipeline import startup_health as ai_correction_startup_health
 from word_constructor.admin_views import enqueue_background_review_log
@@ -725,23 +724,6 @@ def _parse_ai_replace_options() -> tuple[bool, str]:
     return use_ai, str(prompt)
 
 
-def _raw_ai_placeholder_values(slot_values: dict[str, str]) -> dict[str, Any]:
-    try:
-        if request.is_json:
-            payload = request.get_json(silent=True) or {}
-            parsed = payload.get("params", payload.get("placeholders", payload.get("values", {})))
-        else:
-            raw = request.form.get("params") or request.form.get("placeholders") or "{}"
-            parsed = json.loads(raw) if raw.strip() else {}
-    except Exception:
-        return dict(slot_values)
-
-    if not isinstance(parsed, dict):
-        return dict(slot_values)
-    scalar_keys = set(slot_values)
-    return {str(key): value for key, value in parsed.items() if str(key) in scalar_keys}
-
-
 def _placeholder_context_snippet(text: str, match: re.Match, window: int) -> str:
     return _ai_context_snippet(text, match, window)
 
@@ -858,12 +840,6 @@ def _preserve_kazakh_patronymic_suffixes(original: str, declined: str) -> str:
         if word.lower().endswith(("ұлы", "улы", "қызы", "кизы")):
             declined_words[idx] = word
     return " ".join(declined_words)
-
-
-def _decline_value(value: str, case: str) -> str:
-    declined = склонить(value, case)
-    declined = _fix_common_feminine_surname_case(value, declined, case)
-    return _preserve_kazakh_patronymic_suffixes(value, declined)
 
 
 def _is_code_like_token(token: str) -> bool:
@@ -1401,38 +1377,6 @@ def _case_hint_for_placeholder_occurrence(key: str, context: str) -> str | None:
     return None
 
 
-def _apply_deterministic_case_hints(
-    occurrence_values: dict[tuple[str, int], str],
-    occurrences: list[dict[str, Any]],
-) -> None:
-    for item in occurrences:
-        key = str(item.get("key") or "")
-        occurrence = int(item.get("occurrence") or 0)
-        value = str(item.get("value") or "")
-        context = str(item.get("context") or "")
-        if item.get("ai_excluded"):
-            if key and occurrence:
-                occurrence_values[(key, occurrence)] = (
-                    _normalize_signature_title(value)
-                    if item.get("signature_title_normalize")
-                    else _normalize_signature_name(value)
-                )
-            continue
-        if key and occurrence and value and _is_title_or_department_key(key):
-            normalized_value = _normalize_common_business_abbreviations(value)
-            if normalized_value != value:
-                occurrence_values[(key, occurrence)] = normalized_value
-        case = _case_hint_for_placeholder_occurrence(key, context)
-        if not key or not occurrence or not value or not case:
-            continue
-        if case == "preserve":
-            occurrence_values[(key, occurrence)] = value
-        elif case == "date_ru_no_year_word":
-            occurrence_values[(key, occurrence)] = _format_ru_date_no_year_word(value)
-        else:
-            occurrence_values[(key, occurrence)] = _decline_value(value, case)
-
-
 def _request_ai_placeholder_corrections(
     slot_values: dict[str, Any],
     contexts: dict[str, list[str]],
@@ -1618,8 +1562,7 @@ def _ai_correct_slot_values(
     with concurrent.futures.ThreadPoolExecutor(max_workers=2 if claude_is_available else 1) as pool:
         gpt_future = pool.submit(
             _ai_pipeline_correct_slot_values,
-            doc, slot_values, prompt_ai, None,
-            raw_ai_values=_raw_ai_placeholder_values(slot_values),
+            doc, slot_values, prompt_ai,
             log_key=log_key,
             call_log=call_log,
             timeout_seconds=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS,
@@ -3967,32 +3910,23 @@ def api_replace_docx_placeholders():
     try:
         filename, template_bytes, slot_values, table_params, table_object_params = _parse_replace_payload()
         doc = Document(BytesIO(template_bytes))
-        ai_result = _ai_pipeline_correct_document_two_model(
-            doc,
-            slot_values,
-            "",
-            log_key=f"replace-{uuid.uuid4().hex}",
+        log_key = f"replace-{uuid.uuid4().hex}"
+        slot_values, slot_occurrence_values, _ = _ai_correct_slot_values(
+            doc, slot_values, "",
+            log_key=log_key,
             call_log={"document_name": filename},
         )
-        final_values = ai_result.get("final_values") or slot_values
-        review_payload = ai_result.get("review_payload")
-        result_bytes = fill_docx(template_bytes, final_values, table_params, table_object_params=table_object_params)
+        result_bytes = fill_docx(
+            template_bytes, slot_values, table_params,
+            table_object_params=table_object_params,
+            slot_occurrence_values=slot_occurrence_values,
+        )
     except json.JSONDecodeError as exc:
         return jsonify({"error": f"Invalid JSON params: {exc}"}), 400
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": f"Cannot replace placeholders: {exc}"}), 400
-
-    if review_payload is not None:
-        enqueue_background_review_log(
-            review_payload.get("original_params", {}),
-            review_payload.get("gpt_response", {}),
-            review_payload.get("claude_result", {}),
-            str(review_payload.get("rendered_preview") or ""),
-            document_name=filename,
-            log_key=str(review_payload.get("log_key") or ""),
-        )
 
     return send_file(
         BytesIO(result_bytes),
