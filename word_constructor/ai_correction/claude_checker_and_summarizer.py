@@ -12,6 +12,8 @@ except Exception:  # pragma: no cover - optional dependency
     Anthropic = None
     _ANTHROPIC_AVAILABLE = False
 
+import re as _re
+
 from .claude_checker import claude_available, claude_summarize_review_queue
 from .openai_client import SYSTEM_PROMPT as _GPT_CORRECTION_RULES, _rules_context
 from .rules import load_rules_config
@@ -75,6 +77,19 @@ def _strip_json_fence(raw_text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _extract_json_object(text: str) -> str:
+    """Find the first {...} JSON object in text, even when Claude adds prose around it."""
+    # Try the whole text first
+    stripped = _strip_json_fence(text)
+    if stripped.startswith("{"):
+        return stripped
+    # Find the first { ... } block
+    match = _re.search(r"\{.*\}", text, _re.DOTALL)
+    if match:
+        return match.group(0)
+    return ""
+
+
 def _response_text(response: Any) -> str:
     parts: list[str] = []
     for block in getattr(response, "content", []) or []:
@@ -91,6 +106,13 @@ def _client() -> Any:
     return Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY") or None)
 
 
+_CLAUDE_SYSTEM = (
+    _GPT_CORRECTION_RULES
+    + "\n\nCRITICAL: Your response MUST be a single raw JSON object — no markdown, "
+    "no code fences, no explanation, no preamble. Start your response with { and end with }."
+)
+
+
 def claude_correct_values(
     full_text: str,
     slot_values: dict[str, str],
@@ -100,9 +122,7 @@ def claude_correct_values(
     call_log: dict[str, Any] | None = None,
     timeout_seconds: float = 45.0,
 ) -> tuple[dict[str, str], str]:
-    """Simple correction mirror of GPT: send {template, placeholders} → {key: corrected_value}.
-
-    Uses the same SYSTEM_PROMPT as GPT so both models follow identical rules.
+    """Simple correction: {template, placeholders} → {key: corrected_value}.
     Returns (corrected_dict, summary_note).
     """
     model = model or os.environ.get(
@@ -111,7 +131,7 @@ def claude_correct_values(
     )
 
     rules_ctx = _rules_context(load_rules_config())
-    system = _GPT_CORRECTION_RULES
+    system = _CLAUDE_SYSTEM
     if rules_ctx:
         system += "\n\nSystem rules from configuration:\n" + rules_ctx
 
@@ -127,23 +147,38 @@ def claude_correct_values(
     if call_log is not None:
         call_log.setdefault("claude_pass", {}).update({"model": model, "placeholder_count": len(slot_values)})
 
+    # Prefill the assistant turn with "{" to force JSON-only output
     response = _client().messages.create(
         model=model,
         max_tokens=4000,
         system=system,
-        messages=[{"role": "user", "content": body}],
+        messages=[
+            {"role": "user", "content": body},
+            {"role": "assistant", "content": "{"},
+        ],
         temperature=0,
         timeout=timeout_seconds,
     )
+
+    stop_reason = getattr(response, "stop_reason", None)
     raw = _response_text(response)
-    logger.info("Claude correction response: log_key=%s text=%s", log_key, raw[:300])
+    logger.warning(
+        "Claude correction response: log_key=%s stop_reason=%s raw_len=%d raw=%r",
+        log_key, stop_reason, len(raw), raw[:500],
+    )
 
-    if not raw:
-        raise ValueError("Claude returned an empty response")
+    # Reconstruct full response — we prefilled "{" so prepend it back
+    full_raw = "{" + raw
 
-    parsed = json.loads(_strip_json_fence(raw))
+    json_str = _extract_json_object(full_raw)
+    if not json_str:
+        raise ValueError(
+            f"Claude returned no JSON object (stop_reason={stop_reason!r} raw={raw[:200]!r})"
+        )
+
+    parsed = json.loads(json_str)
     if not isinstance(parsed, dict):
-        raise ValueError("Claude response is not a JSON object")
+        raise ValueError(f"Claude response is not a JSON object: {json_str[:200]!r}")
 
     corrected = {str(k): str(v) for k, v in parsed.items() if k in slot_values}
     missing = sorted(set(slot_values) - set(corrected))
