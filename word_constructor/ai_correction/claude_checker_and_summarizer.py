@@ -106,13 +106,6 @@ def _client() -> Any:
     return Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY") or None)
 
 
-_CLAUDE_SYSTEM = (
-    _GPT_CORRECTION_RULES
-    + "\n\nCRITICAL: Your response MUST be a single raw JSON object — no markdown, "
-    "no code fences, no explanation, no preamble. Start your response with { and end with }."
-)
-
-
 def claude_correct_values(
     full_text: str,
     slot_values: dict[str, str],
@@ -131,7 +124,7 @@ def claude_correct_values(
     )
 
     rules_ctx = _rules_context(load_rules_config())
-    system = _CLAUDE_SYSTEM
+    system = _GPT_CORRECTION_RULES
     if rules_ctx:
         system += "\n\nSystem rules from configuration:\n" + rules_ctx
 
@@ -147,38 +140,55 @@ def claude_correct_values(
     if call_log is not None:
         call_log.setdefault("claude_pass", {}).update({"model": model, "placeholder_count": len(slot_values)})
 
-    # Prefill the assistant turn with "{" to force JSON-only output
+    # Use tools to force structured JSON output — the only reliable way with Claude API
+    tool_schema = {
+        "name": "corrected_placeholders",
+        "description": "Return every placeholder with its grammar-corrected value.",
+        "input_schema": {
+            "type": "object",
+            "properties": {str(k): {"type": "string"} for k in slot_values},
+            "required": [str(k) for k in slot_values],
+            "additionalProperties": False,
+        },
+    }
+
     response = _client().messages.create(
         model=model,
         max_tokens=4000,
         system=system,
-        messages=[
-            {"role": "user", "content": body},
-            {"role": "assistant", "content": "{"},
-        ],
+        messages=[{"role": "user", "content": body}],
+        tools=[tool_schema],
+        tool_choice={"type": "tool", "name": "corrected_placeholders"},
         temperature=0,
         timeout=timeout_seconds,
     )
 
     stop_reason = getattr(response, "stop_reason", None)
-    raw = _response_text(response)
-    logger.warning(
-        "Claude correction response: log_key=%s stop_reason=%s raw_len=%d raw=%r",
-        log_key, stop_reason, len(raw), raw[:500],
+    logger.info(
+        "Claude correction response: log_key=%s stop_reason=%s",
+        log_key, stop_reason,
     )
 
-    # Reconstruct full response — we prefilled "{" so prepend it back
-    full_raw = "{" + raw
+    # Extract tool_use block input
+    parsed: Any = None
+    for block in getattr(response, "content", []) or []:
+        if getattr(block, "type", None) == "tool_use":
+            parsed = getattr(block, "input", None)
+            break
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            parsed = block.get("input")
+            break
 
-    json_str = _extract_json_object(full_raw)
-    if not json_str:
-        raise ValueError(
-            f"Claude returned no JSON object (stop_reason={stop_reason!r} raw={raw[:200]!r})"
-        )
+    if parsed is None:
+        raw_fallback = _response_text(response)
+        logger.warning("Claude tool_use block missing, trying text fallback: log_key=%s raw=%r", log_key, raw_fallback[:300])
+        json_str = _extract_json_object(raw_fallback)
+        if not json_str:
+            raise ValueError(f"Claude returned no tool_use block and no JSON (stop_reason={stop_reason!r})")
+        parsed = json.loads(json_str)
 
-    parsed = json.loads(json_str)
     if not isinstance(parsed, dict):
-        raise ValueError(f"Claude response is not a JSON object: {json_str[:200]!r}")
+        raise ValueError(f"Claude tool input is not a dict: {parsed!r}")
 
     corrected = {str(k): str(v) for k, v in parsed.items() if k in slot_values}
     missing = sorted(set(slot_values) - set(corrected))
