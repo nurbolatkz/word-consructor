@@ -1,3 +1,4 @@
+"""Extraction — walk a .docx and find placeholder occurrences. No preprocessing."""
 from __future__ import annotations
 
 import re
@@ -7,9 +8,7 @@ from docx import Document
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-from .governing import detect_case_for_placeholder
 from .types import Occurrence, SanityCheck, TextUnit
-from .rules import RulesConfig, department_rule, is_department_placeholder
 
 PLACEHOLDER_RE = re.compile(r"\{\{([^{}\n\r]{1,120})\}\}|\[([^\[\]\n\r]{1,120})\]")
 _CONTEXT_CHARS_DEFAULT = 240
@@ -66,13 +65,13 @@ def iter_text_units(doc: Document, include_headers_footers: bool = False) -> lis
             paragraphs = [para_full_text(para) for para in part.paragraphs if para_full_text(para).strip()]
             for table in part.tables:
                 for row in table.rows:
-                    for cell in row.cells:
-                        text = cell_text(cell)
+                    for c in row.cells:
+                        text = cell_text(c)
                         if text.strip():
                             paragraphs.append(text)
             text = "\n".join(paragraphs)
             if text.strip():
-                units.append(TextUnit(source_type, f"{source_type}[section={section_idx}]", text, ai_excluded=True))
+                units.append(TextUnit(source_type, f"{source_type}[section={section_idx}]", text))
     return units
 
 
@@ -85,12 +84,7 @@ def document_plain_text(doc: Document) -> str:
 
 
 def document_full_text(doc: Document) -> str:
-    """Full document text: headers → body paragraphs/tables → footers.
-
-    Sent to AI as the single source of context so it can determine the correct
-    grammatical form of every placeholder from the surrounding prose, table
-    structure, and document-level framing text.
-    """
+    """Full document text with structural labels — sent to AI as context."""
     blocks: list[str] = []
     for section_idx, section in enumerate(doc.sections):
         for part_name, part in (("header", section.header), ("footer", section.footer)):
@@ -101,8 +95,8 @@ def document_full_text(doc: Document) -> str:
                     lines.append(t)
             for table in part.tables:
                 for row in table.rows:
-                    for cell in row.cells:
-                        t = cell_text(cell).strip()
+                    for c in row.cells:
+                        t = cell_text(c).strip()
                         if t:
                             lines.append(t)
             if lines:
@@ -117,20 +111,6 @@ def document_placeholder_scan_text(doc: Document) -> str:
     return "\n".join(unit.text for unit in iter_text_units(doc) if unit.text.strip())
 
 
-
-
-def placeholder_sentence_sides(text: str, match: re.Match) -> tuple[str, str]:
-    before_text = text[:match.start()]
-    after_text = text[match.end():]
-    before_boundary = max(before_text.rfind(ch) for ch in (".", "!", "?", "\n", "\r", ";", ":"))
-    if before_boundary >= 0:
-        before_text = before_text[before_boundary + 1:]
-    after_candidates = [idx for idx in (after_text.find(ch) for ch in (".", "!", "?", "\n", "\r", ";")) if idx >= 0]
-    if after_candidates:
-        after_text = after_text[:min(after_candidates)]
-    return before_text, after_text
-
-
 def context_snippet(text: str, match: re.Match, window: int = _CONTEXT_CHARS_DEFAULT) -> str:
     start = max(0, match.start() - window)
     end = min(len(text), match.end() + window)
@@ -142,65 +122,36 @@ def context_snippet(text: str, match: re.Match, window: int = _CONTEXT_CHARS_DEF
     return snippet
 
 
-_SIGNATURE_TITLE_RE = re.compile(
-    r"\b(?:член[а-я]*|правлени[яею]|председател[яьюе]?|заместител[яьюе]?|директор[а-я]*|"
-    r"руководител[яьюе]?|начальник[а-я]*|исполнительн[а-я]+|генеральн[а-я]+)\b",
-    re.IGNORECASE,
-)
-_INITIAL_SURNAME_RE = re.compile(r"^[А-ЯЁA-Z]\.?* [А-ЯЁA-Z][А-ЯЁа-яёA-Za-z\-]+$".replace("\u0001* ", r"\s*"))
-_FULL_NAME_RE = re.compile(r"^[А-ЯЁ][А-ЯЁа-яё\-]+(?:\s+[А-ЯЁ][А-ЯЁа-яё\-]+){1,3}$")
-_VERB_HINT_RE = re.compile(r"\b(?:прошу|предоставить|назначить|уволить|перевести|согласовать|утвердить|является|составил|подписал|обязать|направить|принять)\b", re.IGNORECASE)
-_SIGNATURE_KEY_RE = re.compile(r"(?:подпис|соглас|утверд|руковод|директор|председател|заместител|sign|signer)", re.IGNORECASE)
-_SIGNATURE_TITLE_KEY_RE = re.compile(r"(?:должност|позици|руковод|директор|председател|заместител|title|position)", re.IGNORECASE)
-
-
-def is_sole_placeholder(full_text: str) -> re.Match | None:
-    stripped = full_text.strip()
-    if not stripped:
-        return None
-    matches = list(PLACEHOLDER_RE.finditer(stripped))
-    if len(matches) == 1 and matches[0].group(0) == stripped:
-        return matches[0]
-    return None
-
-
-def looks_like_signature_name_or_label(value: str) -> bool:
-    cleaned = re.sub(r"\s+", " ", value or "").strip()
-    return bool(cleaned and (_INITIAL_SURNAME_RE.match(cleaned) or _FULL_NAME_RE.match(cleaned)))
-
-
-def looks_like_signature_title(value: str) -> bool:
-    cleaned = re.sub(r"\s+", " ", value or "").strip()
-    return bool(cleaned and _SIGNATURE_TITLE_RE.search(cleaned) and not looks_like_signature_name_or_label(cleaned))
-
-
-_JOB_TITLE_KEY_RE = re.compile(r"(?:должност|позиц|(?:^|[^а-я])title|position)", re.IGNORECASE)
-
-
-def _is_job_title_key(key: str) -> bool:
-    """True for job-title placeholder keys like РеквизитыДолжностьРуководителяНаименование."""
-    return bool(_JOB_TITLE_KEY_RE.search(key))
-
-
-def is_signature_or_approval_table_cell(unit: TextUnit, key: str, value: str) -> bool:
-    if unit.source_type != "table_cell":
-        return False
-    text = re.sub(r"\s+", " ", unit.text or "").strip()
-    row_texts = [re.sub(r"\s+", " ", item or "").strip() for item in unit.row_cell_texts]
-    row_joined = " | ".join(row_texts)
-    if _VERB_HINT_RE.search(text):
-        return False
-    placeholder_only_or_short = bool(is_sole_placeholder(text)) or len(text) <= 120
-    row_has_signature_title = bool(_SIGNATURE_TITLE_RE.search(row_joined) or _SIGNATURE_TITLE_RE.search(value) or _SIGNATURE_TITLE_KEY_RE.search(row_joined))
-    key_or_value_is_signatory = bool(_SIGNATURE_KEY_RE.search(key)) or looks_like_signature_name_or_label(value)
-    if not (placeholder_only_or_short and row_has_signature_title and key_or_value_is_signatory):
-        return False
-    # Job-title keys (Должность, Position) in the signature block are NOT excluded from AI —
-    # AI sees the full document structure and can normalise capitalization and abbreviations itself.
-    # Only actual person-name values are excluded to prevent AI from mangling names.
-    if _is_job_title_key(key) and not looks_like_signature_name_or_label(value):
-        return False
-    return True
+def extract_placeholder_occurrences(doc: Document, slot_values: dict[str, str]) -> list[dict[str, Any]]:
+    """Walk the document and return one dict per placeholder occurrence."""
+    if not slot_values:
+        return []
+    wanted = set(slot_values)
+    counts: dict[str, int] = {}
+    result: list[dict[str, Any]] = []
+    for unit in iter_text_units(doc):
+        if not unit.text:
+            continue
+        for match in PLACEHOLDER_RE.finditer(unit.text):
+            key = match_key(match)
+            if key not in wanted:
+                continue
+            occ_idx = counts.get(key, 0)
+            counts[key] = occ_idx + 1
+            result.append({
+                "id": f"{key}#{occ_idx}",
+                "key": key,
+                "placeholder": key,
+                "occurrence": occ_idx + 1,
+                "occurrence_index": occ_idx,
+                "value": str(slot_values[key]),
+                "original_value": str(slot_values[key]),
+                "context": context_snippet(unit.text, match),
+                "context_text": context_snippet(unit.text, match),
+                "source_type": unit.source_type,
+                "source_path": unit.source_path,
+            })
+    return result
 
 
 def raw_placeholder_matches_from_doc(doc: Document, slot_values: dict[str, Any]) -> list[dict[str, Any]]:
@@ -217,146 +168,9 @@ def raw_placeholder_matches_from_doc(doc: Document, slot_values: dict[str, Any])
                 "placeholder": key,
                 "source_type": unit.source_type,
                 "source_path": unit.source_path,
-                "text_repr": repr(unit.text),
                 "context_text": context_snippet(unit.text, match),
             })
     return matches
-
-
-def _normalize_for_compare(value: str) -> str:
-    return re.sub(r"\s+", " ", value or "").strip().lower()
-
-
-def _word_prefixes(text: str, prefix_len: int = 5) -> frozenset[str]:
-    """Return word-prefix stems for fuzzy Russian/Kazakh inflection-tolerant matching.
-
-    Uses first `prefix_len` chars of each word (≥4 chars long) so that
-    'департамент' and 'департамента' both yield 'депар', enabling match
-    across nominative / genitive / accusative forms.
-    """
-    return frozenset(
-        w[:prefix_len]
-        for w in re.findall(r"[а-яёА-ЯЁa-zA-Zәіңғүұқөһ]{4,}", text.lower())
-    )
-
-
-def _mark_redundant_adjacent_occurrences(occurrences: list[Occurrence]) -> None:
-    """Mark occurrence A as redundant when all its significant words are already
-    present in adjacent occurrence B's value (inflection-tolerant via word prefixes).
-
-    Example: Должность='Главный менеджер департамента кадровой политики',
-             Подразделение='департамент кадровой политики'
-    All word-stems of Подразделение ⊂ word-stems of Должность
-    → Подразделение is marked redundant_in=<Должность occurrence id>.
-    """
-    id_to = {o.id: o for o in occurrences}
-    for item in occurrences:
-        val = _normalize_for_compare(item.original_value)
-        if not val or len(val) < 3:
-            continue
-        val_stems = _word_prefixes(val)
-        if not val_stems:
-            continue
-        for adj_id in item.adjacent_occurrence_ids:
-            adj = id_to.get(adj_id)
-            if not adj:
-                continue
-            adj_stems = _word_prefixes(_normalize_for_compare(adj.original_value))
-            # All significant words of current value must be a *proper* subset of adjacent
-            # (proper subset ensures the adjacent has more content, not just the same words)
-            if val_stems and val_stems < adj_stems:
-                item.redundant_in = adj_id
-                break
-
-
-def _mark_adjacent_occurrences(occurrences: list[Occurrence]) -> None:
-    by_source: dict[str, list[Occurrence]] = {}
-    for item in occurrences:
-        by_source.setdefault(f"{item.source_type}:{item.source_path}", []).append(item)
-    for items in by_source.values():
-        for idx, item in enumerate(items):
-            adjacent: list[str] = []
-            if idx > 0:
-                adjacent.append(items[idx - 1].id)
-            if idx + 1 < len(items):
-                adjacent.append(items[idx + 1].id)
-            item.adjacent_occurrence_ids = adjacent
-
-
-def extract_placeholder_occurrences(doc: Document, slot_values: dict[str, str], rules: RulesConfig | None = None) -> list[dict[str, Any]]:
-    occurrences: list[Occurrence] = []
-    if not slot_values:
-        return []
-    wanted = set(slot_values)
-    counts: dict[str, int] = {}
-    dept_rule = department_rule(rules)
-    for unit in iter_text_units(doc):
-        if not unit.text:
-            continue
-        for match in PLACEHOLDER_RE.finditer(unit.text):
-            key = match_key(match)
-            if key not in wanted:
-                continue
-            occurrence_index = counts.get(key, 0)
-            counts[key] = occurrence_index + 1
-            value = str(slot_values[key])
-            context = context_snippet(unit.text, match)
-            text_before, text_after = placeholder_sentence_sides(unit.text, match)
-            detected_case, case_note = detect_case_for_placeholder(text_before, text_after)
-            ai_excluded = is_signature_or_approval_table_cell(unit, key, value)
-            signature_title = ai_excluded and looks_like_signature_title(value)
-            fixed_department = is_department_placeholder(key, rules)
-            occurrences.append(Occurrence(
-                id=f"{key}#{occurrence_index}",
-                key=key,
-                placeholder=key,
-                occurrence=occurrence_index + 1,
-                occurrence_index=occurrence_index,
-                value=value,
-                original_value=value,
-                context=context,
-                context_text=context,
-                context_with_value=context.replace(match.group(0), value, 1),
-                source_type=unit.source_type,
-                source_path=unit.source_path,
-                literal_placeholder=match.group(0),
-                ai_excluded=ai_excluded,
-                ai_exclusion_reason="signature_or_approval_table" if ai_excluded else "",
-                signature_title_normalize=signature_title,
-                deterministic_behavior=str(dept_rule.get("behavior") or "") if fixed_department else "",
-                expected_case=str(dept_rule.get("default_case") or "") if fixed_department else "",
-                fixed_form=fixed_department,
-                never_merge_with_adjacent_occurrence=bool(dept_rule.get("never_merge_with_adjacent_occurrence")) if fixed_department else False,
-                preserve_internal_abbreviations=bool(dept_rule.get("preserve_internal_abbreviations")) if fixed_department else False,
-                text_before=text_before,
-                text_after=text_after,
-                detected_case=detected_case.value,
-                case_detection_note=case_note,
-            ))
-    _mark_adjacent_occurrences(occurrences)
-    _mark_redundant_adjacent_occurrences(occurrences)
-    return [item.to_dict() for item in occurrences]
-
-
-def extract_header_footer_placeholder_occurrences(doc: Document, slot_values: dict[str, str]) -> list[dict[str, Any]]:
-    occurrences: list[dict[str, Any]] = []
-    wanted = set(slot_values)
-    for unit in iter_text_units(doc, include_headers_footers=True):
-        if unit.source_type not in {"header", "footer"}:
-            continue
-        for match in PLACEHOLDER_RE.finditer(unit.text):
-            key = match_key(match)
-            if key in wanted:
-                occurrences.append({
-                    "key": key,
-                    "placeholder": key,
-                    "source_type": unit.source_type,
-                    "source_path": unit.source_path,
-                    "context_text": context_snippet(unit.text, match),
-                    "ai_excluded": True,
-                    "ai_exclusion_reason": "header_footer",
-                })
-    return occurrences
 
 
 def sanity_check_occurrence_counts(doc: Document, slot_values: dict[str, Any], occurrences: list[dict[str, Any]]) -> SanityCheck:
@@ -389,9 +203,7 @@ def extract_placeholder_contexts(doc: Document, slot_values: dict[str, str], max
 # Public notebook API -------------------------------------------------------
 
 def walk_document(doc) -> list[TextUnit]:
-    """Walk body paragraphs, every table cell's paragraphs, headers, footers.
-    Merge adjacent runs into single text per unit before returning.
-    """
+    """Walk body paragraphs, every table cell's paragraphs, headers, footers."""
     return iter_text_units(doc, include_headers_footers=True)
 
 
@@ -419,8 +231,6 @@ def find_occurrences(text_units: list[TextUnit], placeholders: dict[str, str]) -
                 context_with_value=context.replace(match.group(0), str(placeholders[key]), 1),
                 literal_placeholder=match.group(0),
             ))
-    _mark_adjacent_occurrences(occurrences)
-    _mark_redundant_adjacent_occurrences(occurrences)
     return occurrences
 
 

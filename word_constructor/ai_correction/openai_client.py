@@ -18,10 +18,8 @@ You will receive:
 2) "placeholders": a JSON object mapping placeholder names (names vary between
    templates and may not be self-explanatory, e.g. "ДолжностьЗамещающего",
    "СотрудникДолжность", "ДепартаментНаименование") to their raw values
-3) "case_hints": deterministic governing-phrase results for each placeholder occurrence
+3) "occurrences": the context snippet around each occurrence of each placeholder in the document
 4) "additional_instructions" (optional): extra context from the end user
-
-The case_hints are authoritative. If a case_hints item says required_case is not "без_изменений", generate that grammatical form; do not infer a different case. If required_case is "без_изменений", keep the value's case unchanged except for safe capitalization/typo fixes.
 
 METHOD (follow these steps in order):
 STEP 1 — Mentally substitute every placeholder's raw value into "template" at its bracket position, producing the full rendered sentence(s).
@@ -117,12 +115,10 @@ def _build_payload(
     occurrences: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     normalized_placeholders = {str(key): str(value) for key, value in placeholders.items()}
-    case_hints = [
+    occurrence_contexts = [
         {
             "placeholder": str(item.get("key") or item.get("placeholder") or ""),
             "occurrence_index": int(item.get("occurrence_index", 0) or 0),
-            "required_case": str(item.get("detected_case") or ""),
-            "note": str(item.get("case_detection_note") or ""),
             "context": str(item.get("context") or item.get("context_text") or ""),
         }
         for item in occurrences or []
@@ -131,7 +127,7 @@ def _build_payload(
     user_payload: dict[str, Any] = {
         "template": full_text,
         "placeholders": normalized_placeholders,
-        "case_hints": case_hints,
+        "occurrences": occurrence_contexts,
     }
     if prompt_ai:
         user_payload["additional_instructions"] = str(prompt_ai)
