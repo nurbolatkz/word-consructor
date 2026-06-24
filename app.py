@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
+import threading
+import time
 
 from flask import Flask, jsonify, redirect, request
 from flask_sock import Sock
+
+logger = logging.getLogger(__name__)
 
 from sign_document import sign_document
 from word_constructor.admin_views import admin_reviews
@@ -36,6 +41,24 @@ class NormalizeLeadingSlashesMiddleware:
         return self.app(environ, start_response)
 
 
+def _start_pattern_analyzer_background(interval_seconds: int = 3600) -> None:
+    """Start a daemon thread that runs the pattern analyzer once per interval."""
+    def _loop() -> None:
+        # Wait one interval before the first run so startup logs stay clean
+        time.sleep(interval_seconds)
+        while True:
+            try:
+                from word_constructor.ai_correction.pattern_analyzer import run_analysis_pass
+                report = run_analysis_pass()
+                logger.info("Pattern analyzer pass: %s", report)
+            except Exception as exc:
+                logger.warning("Pattern analyzer pass failed: %s", exc)
+            time.sleep(interval_seconds)
+
+    t = threading.Thread(target=_loop, daemon=True, name="pattern-analyzer")
+    t.start()
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.url_map.strict_slashes = False
@@ -50,6 +73,11 @@ def create_app() -> Flask:
     app.register_blueprint(word_constructor, url_prefix="/services/word-constructor")
     app.register_blueprint(sign_document, url_prefix="/sign_document")
     app.register_blueprint(admin_reviews, url_prefix="/admin")
+
+    _start_pattern_analyzer_background(
+        interval_seconds=int(os.environ.get("PATTERN_ANALYZER_INTERVAL_SECONDS", "3600"))
+    )
+
     sock = Sock(app)
 
     @app.get("/")

@@ -172,6 +172,17 @@ def decide_rule_candidate(candidate_id: str):
     return jsonify({"status": "ok"})
 
 
+@admin_reviews.post("/run-analysis")
+def run_analysis_now():
+    """Manually trigger one pattern-analysis pass. Returns the pass report as JSON."""
+    try:
+        from word_constructor.ai_correction.pattern_analyzer import run_analysis_pass
+        report = run_analysis_pass()
+        return jsonify({"status": "ok", "report": report})
+    except Exception as exc:
+        return jsonify({"status": "error", "detail": str(exc)}), 500
+
+
 __all__ = [
     "admin_reviews",
     "append_review_item",

@@ -1614,9 +1614,17 @@ def _ai_correct_slot_values(
     final_occurrence_values = gpt_occurrence_values
     review_summary = ""
 
+    # Collapse per-occurrence GPT corrections to per-key for logging (last occurrence wins)
+    gpt_per_key: dict[str, str] = {}
+    for (key, _occ1), val in gpt_occurrence_values.items():
+        gpt_per_key[key] = val
+
+    full_text = _ai_document_full_text(doc)
+    changes_from_gpt: list[dict[str, str]] = []
+    final_per_key = dict(gpt_per_key)
+
     if _ai_claude_available():
         try:
-            full_text = _ai_document_full_text(doc)
             claude_corrections, review_summary = _ai_claude_correct_occurrences(
                 full_text=full_text,
                 occurrences=result.occurrences or [],
@@ -1627,50 +1635,45 @@ def _ai_correct_slot_values(
             )
             # Claude wins on disagreement
             final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}
-
-            # Persist full GPT+Claude exchange to review queue in background
-            try:
-                gpt_per_key: dict[str, str] = {}
-                for (key, _occ1), val in gpt_occurrence_values.items():
-                    gpt_per_key[key] = val
-                claude_per_key: dict[str, str] = {}
-                for (key, _occ1), val in final_occurrence_values.items():
-                    claude_per_key[key] = val
-                changes_from_gpt = [
-                    {
-                        "placeholder": k,
-                        "gpt_value": gpt_per_key.get(k, ""),
-                        "claude_value": v,
-                        "reason": "Исправлено Claude",
-                    }
-                    for k, v in claude_per_key.items()
-                    if v != gpt_per_key.get(k, "")
-                ]
-                claude_result_for_log = {
-                    "corrected_values": claude_per_key,
-                    "review_summary": {
-                        "had_issues": bool(changes_from_gpt),
-                        "changes_from_gpt": changes_from_gpt,
-                        "note": review_summary,
-                    },
+            for (key, _occ1), val in final_occurrence_values.items():
+                final_per_key[key] = val
+            changes_from_gpt = [
+                {
+                    "placeholder": k,
+                    "gpt_value": gpt_per_key.get(k, ""),
+                    "claude_value": v,
+                    "reason": "Исправлено Claude",
                 }
-                enqueue_background_review_log(
-                    original_params={"template": full_text, "placeholders": dict(slot_values)},
-                    gpt_response=gpt_per_key,
-                    claude_result=claude_result_for_log,
-                    document=full_text,
-                    document_name=str((call_log or {}).get("document_name") or (call_log or {}).get("filename") or ""),
-                    log_key=log_key or "",
-                )
-            except Exception as persist_exc:
-                logger.warning("Failed to persist two-model exchange: use_ai_log_key=%s error=%s", log_key, persist_exc)
-
+                for k, v in final_per_key.items()
+                if v != gpt_per_key.get(k, "")
+            ]
         except Exception as exc:
             logger.warning(
                 "Claude correction pass failed; using GPT output: use_ai_log_key=%s error=%s",
                 log_key, exc,
             )
             review_summary = "Проверка Claude недоступна; применены исправления GPT."
+
+    # Always persist to review queue after any AI correction run (not gated on review_needed or Claude)
+    try:
+        claude_result_for_log = {
+            "corrected_values": final_per_key,
+            "review_summary": {
+                "had_issues": bool(changes_from_gpt),
+                "changes_from_gpt": changes_from_gpt,
+                "note": review_summary or "GPT correction applied.",
+            },
+        }
+        enqueue_background_review_log(
+            original_params={"template": full_text, "placeholders": dict(slot_values)},
+            gpt_response=gpt_per_key,
+            claude_result=claude_result_for_log,
+            document=full_text,
+            document_name=str((call_log or {}).get("document_name") or (call_log or {}).get("filename") or ""),
+            log_key=log_key or "",
+        )
+    except Exception as persist_exc:
+        logger.warning("Failed to persist AI correction to review queue: use_ai_log_key=%s error=%s", log_key, persist_exc)
 
     return result.slot_values, final_occurrence_values, review_summary
 

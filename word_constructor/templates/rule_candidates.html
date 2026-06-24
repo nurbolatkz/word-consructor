@@ -34,8 +34,12 @@
   <div class="shell">
     <div class="topbar">
       <h1>Rule Candidates</h1>
-      <a class="back" href="/services/word-constructor/admin/cabinet">← Admin cabinet</a>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="run-btn" class="approve" type="button" onclick="runAnalysis()" style="font-size:13px;padding:7px 14px">Run analysis now</button>
+        <a class="back" href="/services/word-constructor/admin/cabinet">← Admin cabinet</a>
+      </div>
     </div>
+    <div id="run-msg" style="display:none;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px"></div>
     <div class="panel">
       <table>
         <thead>
@@ -79,6 +83,32 @@
     </div>
   </div>
   <script>
+    async function runAnalysis() {
+      const btn = document.getElementById('run-btn');
+      const msg = document.getElementById('run-msg');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      msg.style.display = 'none';
+      try {
+        const res = await fetch('/admin/run-analysis', {method: 'POST'});
+        const data = await res.json();
+        if (data.status === 'ok') {
+          const r = data.report || {};
+          msg.textContent = `Done — processed ${r.processed ?? '?'} log entries, found ${r.candidates ?? '?'} candidates, persisted ${r.persisted_candidates ?? '?'}.`;
+          msg.style.display = 'block';
+          setTimeout(() => location.reload(), 1500);
+        } else {
+          msg.style.background = '#fdecea'; msg.style.borderColor = '#f3b5ad';
+          msg.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+          msg.style.display = 'block';
+          btn.disabled = false; btn.textContent = 'Run analysis now';
+        }
+      } catch(e) {
+        msg.textContent = 'Request failed: ' + e;
+        msg.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Run analysis now';
+      }
+    }
     async function decideCandidate(id, status) {
       const row = document.querySelector(`tr[data-id="${id}"]`);
       if (row) row.querySelectorAll("button").forEach(b => b.disabled = true);
