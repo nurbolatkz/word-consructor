@@ -106,6 +106,8 @@ def correct_slot_values(
     log_key: str | None = None,
     call_log: dict[str, Any] | None = None,
     timeout_seconds: float = 30.0,
+    _precomputed_occurrences: list | None = None,
+    _precomputed_full_text: str | None = None,
 ) -> PipelineCorrectionResult:
     t_start = time.perf_counter()
 
@@ -113,10 +115,12 @@ def correct_slot_values(
         return PipelineCorrectionResult(slot_values, {})
 
     # 1. Extract where every placeholder appears in the document
-    occurrences = extract_placeholder_occurrences(doc, slot_values)
+    occurrences = _precomputed_occurrences if _precomputed_occurrences is not None \
+        else extract_placeholder_occurrences(doc, slot_values)
 
     # 2. Get full labeled document text (headers + body + footers + tables)
-    full_text = document_full_text(doc)
+    full_text = _precomputed_full_text if _precomputed_full_text is not None \
+        else document_full_text(doc)
 
     # 3. Load rules config so AI gets governing phrases + abbreviations as context
     rules = load_rules_config()

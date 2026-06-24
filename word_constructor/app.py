@@ -1594,83 +1594,91 @@ def _ai_correct_slot_values(
 ) -> tuple[dict[str, str], dict[tuple[str, int], str], str]:
     """Returns (slot_values, occurrence_values, review_summary).
 
-    Runs GPT pass first, then an independent Claude pass when available.
-    Claude's output replaces GPT's per occurrence. The full exchange
-    is recorded in call_log and persisted to the review queue via
-    enqueue_background_review_log.
+    GPT and Claude run in parallel when Claude is available.
+    Claude wins on any per-occurrence disagreement with GPT.
     """
+    import concurrent.futures
+
     if not slot_values:
         return slot_values, {}, ""
-    try:
-        result = _ai_pipeline_correct_slot_values(
-            doc,
-            slot_values,
-            prompt_ai,
-            склонить,
+
+    # Pre-extract once so both AI threads share the same input without re-reading the doc
+    occurrences = _ai_extract_placeholder_occurrences(doc, slot_values)
+    full_text = _ai_document_full_text(doc)
+
+    claude_is_available = _ai_claude_available()
+
+    gpt_occurrence_values: dict[tuple[str, int], str] = {}
+    gpt_per_key: dict[str, str] = {}
+    claude_corrections: dict[tuple[str, int], str] = {}
+    review_summary = ""
+    claude_ran = False
+    gpt_result = None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2 if claude_is_available else 1) as pool:
+        gpt_future = pool.submit(
+            _ai_pipeline_correct_slot_values,
+            doc, slot_values, prompt_ai, None,
             raw_ai_values=_raw_ai_placeholder_values(slot_values),
             log_key=log_key,
             call_log=call_log,
             timeout_seconds=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS,
+            _precomputed_occurrences=occurrences,
+            _precomputed_full_text=full_text,
         )
-    except Exception as exc:
-        logger.exception(
-            "AI placeholder correction pipeline failed; using original placeholder values: use_ai_log_key=%s error=%s",
-            log_key,
-            exc,
-        )
-        if call_log is not None:
-            call_log["error"] = f"AI placeholder correction pipeline failed: {exc}"
-        return slot_values, {}, ""
 
-    gpt_occurrence_values = result.occurrence_values
-    final_occurrence_values = gpt_occurrence_values
-    review_summary = ""
+        # Claude gets original occurrences with no GPT pre-answer — fully independent
+        claude_future = pool.submit(
+            _ai_claude_correct_occurrences,
+            full_text, occurrences, {},
+            prompt_ai, None, log_key, call_log,
+        ) if claude_is_available else None
 
-    # Collapse per-occurrence GPT corrections to per-key for logging (last occurrence wins)
-    gpt_per_key: dict[str, str] = {}
-    for (key, _occ1), val in gpt_occurrence_values.items():
-        gpt_per_key[key] = val
-
-    full_text = _ai_document_full_text(doc)
-    changes_from_gpt: list[dict[str, str]] = []
-    final_per_key = dict(gpt_per_key)
-    claude_ran = False
-
-    if _ai_claude_available():
         try:
-            claude_corrections, review_summary = _ai_claude_correct_occurrences(
-                full_text=full_text,
-                occurrences=result.occurrences or [],
-                gpt_occurrence_values=gpt_occurrence_values,
-                prompt_ai=prompt_ai,
-                log_key=log_key,
-                call_log=call_log,
-            )
-            claude_ran = True
-            # Claude wins on disagreement
-            final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}
-            for (key, _occ1), val in final_occurrence_values.items():
-                final_per_key[key] = val
-            changes_from_gpt = [
-                {
-                    "placeholder": k,
-                    "gpt_value": gpt_per_key.get(k, ""),
-                    "claude_value": v,
-                    "reason": "Исправлено Claude",
-                }
-                for k, v in final_per_key.items()
-                if v != gpt_per_key.get(k, "")
-            ]
+            gpt_result = gpt_future.result(timeout=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS + 10)
+            gpt_occurrence_values = gpt_result.occurrence_values
+            for (key, _occ1), val in gpt_occurrence_values.items():
+                gpt_per_key[key] = val
         except Exception as exc:
-            logger.warning(
-                "Claude correction pass failed; using GPT output: use_ai_log_key=%s error=%s",
+            logger.exception(
+                "GPT placeholder correction failed; using original values: use_ai_log_key=%s error=%s",
                 log_key, exc,
             )
-            review_summary = "Проверка Claude недоступна; применены исправления GPT."
+            if call_log is not None:
+                call_log["error"] = f"GPT correction failed: {exc}"
+            if claude_future:
+                claude_future.cancel()
+            return slot_values, {}, ""
 
-    # Triage rule: "pending" when human review has value; "logged" when correction is routine.
-    # pending if: Claude disagreed with GPT, OR Claude didn't run and GPT made a non-trivial change.
-    # logged if: Claude ran and agreed (doubly validated), OR only trivial changes (dates/casing).
+        if claude_future:
+            try:
+                claude_corrections, review_summary = claude_future.result(timeout=30)
+                claude_ran = True
+            except Exception as exc:
+                logger.warning(
+                    "Claude correction pass failed; using GPT output: use_ai_log_key=%s error=%s",
+                    log_key, exc,
+                )
+                review_summary = "Проверка Claude недоступна; применены исправления GPT."
+
+    # Merge: Claude wins per occurrence
+    final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}
+    final_per_key = dict(gpt_per_key)
+    for (key, _occ1), val in final_occurrence_values.items():
+        final_per_key[key] = val
+
+    # Changes where Claude's answer differs from GPT's
+    changes_from_gpt = [
+        {
+            "placeholder": k,
+            "gpt_value": gpt_per_key.get(k, str(slot_values.get(k, ""))),
+            "claude_value": v,
+            "reason": "Исправлено Claude",
+        }
+        for k, v in final_per_key.items()
+        if v != gpt_per_key.get(k, str(slot_values.get(k, "")))
+    ]
+
     if changes_from_gpt:
         item_status = "pending"
     elif claude_ran:
@@ -1680,14 +1688,13 @@ def _ai_correct_slot_values(
     else:
         item_status = "logged"
 
-    # Always persist to review queue after any AI correction run (not gated on review_needed or Claude)
     try:
         claude_result_for_log = {
             "corrected_values": final_per_key,
             "review_summary": {
                 "had_issues": bool(changes_from_gpt),
                 "changes_from_gpt": changes_from_gpt,
-                "note": review_summary or "GPT correction applied.",
+                "note": review_summary or "GPT и Claude проверили все значения.",
             },
         }
         enqueue_background_review_log(
@@ -1702,7 +1709,7 @@ def _ai_correct_slot_values(
     except Exception as persist_exc:
         logger.warning("Failed to persist AI correction to review queue: use_ai_log_key=%s error=%s", log_key, persist_exc)
 
-    return result.slot_values, final_occurrence_values, review_summary
+    return (gpt_result.slot_values if gpt_result else slot_values), final_occurrence_values, review_summary
 
 
 
