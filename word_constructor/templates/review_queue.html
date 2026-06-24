@@ -4,44 +4,78 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI Review Queue</title>
+  <style>
+    :root { --bg:#eef2f6; --surface:#fff; --line:#d6dde5; --text:#142433; --muted:#5c6b7a; --accent:#1f4b7a; --ok:#217346; --warn:#9a6700; --err:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif; }
+    .shell { max-width:1380px; margin:0 auto; padding:24px; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:20px; flex-wrap:wrap; }
+    h1 { margin:0; font-size:24px; }
+    .back { text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; color:var(--accent); background:var(--surface); }
+    .back:hover { background:var(--bg); }
+    .panel { background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:16px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:13px; }
+    th { color:var(--muted); font-size:12px; text-transform:uppercase; background:#f8fafc; white-space:nowrap; }
+    tr:last-child td { border-bottom:0; }
+    pre { margin:0; white-space:pre-wrap; word-break:break-all; font-size:11px; max-height:160px; overflow:auto; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+    .status-pending  { color:var(--warn); font-weight:700; }
+    .status-approved { color:var(--ok);   font-weight:700; }
+    .status-rejected { color:var(--err);  font-weight:700; }
+    button { border:1px solid var(--accent); border-radius:8px; padding:6px 12px; font-size:13px; font-weight:700; cursor:pointer; }
+    button.approve { background:var(--ok);  color:#fff; border-color:var(--ok); }
+    button.reject  { background:var(--err); color:#fff; border-color:var(--err); margin-left:6px; }
+    button:disabled { opacity:.45; cursor:default; }
+    .empty td { text-align:center; color:var(--muted); padding:28px; }
+    @media (max-width:900px) { .shell { padding:16px; } table { display:block; overflow:auto; } }
+  </style>
 </head>
 <body>
-  <h1>AI Review Queue</h1>
-  <table>
-    <thead>
-      <tr>
-        <th>Document</th>
-        <th>Log key</th>
-        <th>Timestamp</th>
-        <th>Status</th>
-        <th>Checker</th>
-        <th>Preview</th>
-        <th>Corrections</th>
-        <th>Decision</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in items %}
-      <tr data-id="{{ item.id }}">
-        <td>{{ item.document_name }}</td>
-        <td>{{ item.log_key }}</td>
-        <td>{{ item.timestamp }}</td>
-        <td>{{ item.status }}</td>
-        <td><pre>{{ item.checker_result | tojson(indent=2) }}</pre></td>
-        <td><pre>{{ item.rendered_preview }}</pre></td>
-        <td><pre>{{ item.corrections | tojson(indent=2) }}</pre></td>
-        <td>
-          <button type="button" onclick="submitReview('{{ item.id }}', 'approved')">Approve</button>
-          <button type="button" onclick="submitReview('{{ item.id }}', 'rejected')">Reject</button>
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8">No review items.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="shell">
+    <div class="topbar">
+      <h1>AI Review Queue</h1>
+      <a class="back" href="/services/word-constructor/admin/cabinet">← Admin cabinet</a>
+    </div>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Document</th>
+            <th>Log key</th>
+            <th>Timestamp</th>
+            <th>Status</th>
+            <th>Checker</th>
+            <th>Preview</th>
+            <th>Corrections</th>
+            <th>Decision</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in items %}
+          <tr data-id="{{ item.id }}">
+            <td>{{ item.document_name }}</td>
+            <td>{{ item.log_key }}</td>
+            <td>{{ item.timestamp }}</td>
+            <td class="status-{{ item.status }}">{{ item.status }}</td>
+            <td><pre>{{ item.checker_result | tojson(indent=2) }}</pre></td>
+            <td><pre>{{ item.rendered_preview }}</pre></td>
+            <td><pre>{{ item.corrections | tojson(indent=2) }}</pre></td>
+            <td style="white-space:nowrap">
+              <button class="approve" type="button" onclick="submitReview('{{ item.id }}', 'approved')">Approve</button>
+              <button class="reject"  type="button" onclick="submitReview('{{ item.id }}', 'rejected')">Reject</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="8">No review items.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
   <script>
     async function submitReview(id, status) {
+      const row = document.querySelector(`tr[data-id="${id}"]`);
+      if (row) row.querySelectorAll("button").forEach(b => b.disabled = true);
       const res = await fetch(`/admin/review/${id}/decide`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
