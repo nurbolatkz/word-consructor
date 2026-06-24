@@ -145,12 +145,42 @@ def _status_from_request() -> str:
     return str(request.form.get("status") or "").strip()
 
 
+def _review_item_display(item: dict[str, Any]) -> dict[str, Any]:
+    """Pre-compute human-readable display fields so the template stays logic-free."""
+    cr = item.get("checker_result") or {}
+    claude_rs = (cr.get("claude_result") or {}).get("review_summary") or {}
+    originals: dict[str, str] = (cr.get("original_params") or {}).get("placeholders") or {}
+    finals: dict[str, str] = (cr.get("claude_result") or {}).get("corrected_values") or cr.get("gpt_response") or {}
+
+    changes = [
+        {"key": k, "before": str(originals.get(k, "")), "after": str(v)}
+        for k, v in finals.items()
+        if str(originals.get(k, "")) != str(v)
+    ]
+    changes_from_gpt: list[dict] = claude_rs.get("changes_from_gpt") or []
+    note = str(claude_rs.get("note") or cr.get("review_summary") or "")
+    had_issues = bool(claude_rs.get("had_issues") or changes_from_gpt)
+
+    raw_preview = str(item.get("rendered_preview") or "")
+    preview = raw_preview[:500] + ("…" if len(raw_preview) > 500 else "")
+
+    return {
+        "had_issues": had_issues,
+        "note": note,
+        "changes_from_gpt": changes_from_gpt,
+        "changes": changes,
+        "preview": preview,
+    }
+
+
 @admin_reviews.get("/review")
 def review_queue_page():
     from flask import request as _req
     show_all = _req.args.get("show_all") == "1"
     all_items = load_review_items()
     items = all_items if show_all else [i for i in all_items if i.get("status") == "pending"]
+    for item in items:
+        item["_display"] = _review_item_display(item)
     return render_template("review_queue.html", items=items, show_all=show_all, total_count=len(all_items))
 
 

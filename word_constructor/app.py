@@ -4037,7 +4037,7 @@ def api_replace_and_open_edit_session():
         doc = Document(BytesIO(template_bytes))
         slot_occurrence_values: dict[tuple[str, int], str] = {}
         use_ai_log_key = f"useai-{uuid.uuid4().hex}" if use_ai else None
-        use_ai_log: dict[str, Any] | None = {"key": use_ai_log_key} if use_ai_log_key else None
+        use_ai_log: dict[str, Any] | None = {"key": use_ai_log_key, "document_name": filename} if use_ai_log_key else None
         review_summary = ""
         if use_ai:
             slot_values, slot_occurrence_values, review_summary = _ai_correct_slot_values(

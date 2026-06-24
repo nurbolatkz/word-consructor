@@ -22,11 +22,23 @@
     th, td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:13px; }
     th { color:var(--muted); font-size:12px; text-transform:uppercase; background:#f8fafc; white-space:nowrap; }
     tr:last-child td { border-bottom:0; }
-    pre { margin:0; white-space:pre-wrap; word-break:break-all; font-size:11px; max-height:160px; overflow:auto; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
     .status-pending  { color:var(--warn); font-weight:700; }
     .status-approved { color:var(--ok);   font-weight:700; }
     .status-rejected { color:var(--err);  font-weight:700; }
     .status-logged   { color:var(--muted); font-size:12px; }
+    .badge-warn { display:inline-block; background:#fff4d6; color:var(--warn); border:1px solid #f6d860; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:700; }
+    .badge-ok   { display:inline-block; background:#e8f5e9; color:var(--ok);   border:1px solid #a5d6a7; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:700; }
+    .note { color:var(--muted); font-size:12px; margin-top:4px; }
+    .diff-list { list-style:none; margin:0; padding:0; }
+    .diff-list li { font-size:12px; margin-bottom:3px; }
+    .diff-key { font-weight:700; color:var(--accent); }
+    .diff-before { color:var(--err); text-decoration:line-through; }
+    .diff-after  { color:var(--ok); font-weight:600; }
+    .diff-arrow  { color:var(--muted); margin:0 4px; }
+    .change-from-gpt { font-size:11px; color:var(--muted); border-left:2px solid var(--warn); padding-left:6px; margin-top:2px; }
+    .preview-text { font-size:12px; color:var(--muted); white-space:pre-wrap; word-break:break-word; max-height:120px; overflow:auto; }
+    .doc-name { font-weight:600; }
+    .doc-key  { font-size:11px; color:var(--muted); }
     button { border:1px solid var(--accent); border-radius:8px; padding:6px 12px; font-size:13px; font-weight:700; cursor:pointer; }
     button.approve { background:var(--ok);  color:#fff; border-color:var(--ok); }
     button.reject  { background:var(--err); color:#fff; border-color:var(--err); margin-left:6px; }
@@ -53,25 +65,68 @@
         <thead>
           <tr>
             <th>Document</th>
-            <th>Log key</th>
-            <th>Timestamp</th>
+            <th>Time</th>
             <th>Status</th>
-            <th>Checker</th>
-            <th>Preview</th>
+            <th>Summary</th>
             <th>Corrections</th>
+            <th>Preview</th>
             <th>Decision</th>
           </tr>
         </thead>
         <tbody>
           {% for item in items %}
+          {% set d = item._display %}
           <tr data-id="{{ item.id }}">
-            <td>{{ item.document_name }}</td>
-            <td>{{ item.log_key }}</td>
-            <td>{{ item.timestamp }}</td>
+
+            <td>
+              <span class="doc-name">{{ item.document_name or '—' }}</span>
+              {% if item.log_key %}<br><span class="doc-key">{{ item.log_key }}</span>{% endif %}
+            </td>
+
+            <td style="white-space:nowrap;font-size:12px;color:var(--muted)">
+              {{ item.timestamp[:19].replace('T',' ') if item.timestamp else '—' }}
+            </td>
+
             <td class="status-{{ item.status }}">{{ item.status }}</td>
-            <td><pre>{{ item.checker_result | tojson(indent=2) }}</pre></td>
-            <td><pre>{{ item.rendered_preview }}</pre></td>
-            <td><pre>{{ item.corrections | tojson(indent=2) }}</pre></td>
+
+            <td>
+              {% if d.had_issues %}
+                <span class="badge-warn">⚠ issues</span>
+              {% else %}
+                <span class="badge-ok">✓ ok</span>
+              {% endif %}
+              {% if d.note %}<p class="note">{{ d.note }}</p>{% endif %}
+              {% if d.changes_from_gpt %}
+                {% for ch in d.changes_from_gpt %}
+                <div class="change-from-gpt">
+                  Claude override — <strong>{{ ch.placeholder }}</strong>:
+                  <span class="diff-before">{{ ch.gpt_value }}</span>
+                  <span class="diff-arrow">→</span>
+                  <span class="diff-after">{{ ch.claude_value }}</span>
+                </div>
+                {% endfor %}
+              {% endif %}
+            </td>
+
+            <td>
+              {% if d.changes %}
+                <ul class="diff-list">
+                  {% for ch in d.changes %}
+                  <li>
+                    <span class="diff-key">{{ ch.key }}</span><br>
+                    <span class="diff-before">{{ ch.before }}</span>
+                    <span class="diff-arrow">→</span>
+                    <span class="diff-after">{{ ch.after }}</span>
+                  </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <span style="color:var(--muted);font-size:12px">No changes</span>
+              {% endif %}
+            </td>
+
+            <td><span class="preview-text">{{ d.preview }}</span></td>
+
             <td style="white-space:nowrap">
               {% if item.status == 'pending' %}
               <button class="approve" type="button" onclick="submitReview('{{ item.id }}', 'approved')">Approve</button>
@@ -80,9 +135,14 @@
               <span style="color:var(--muted);font-size:12px">{{ item.status }}</span>
               {% endif %}
             </td>
+
           </tr>
           {% else %}
-          <tr class="empty"><td colspan="8">{% if show_all %}No review items yet.{% else %}No pending items. <a href="/admin/review?show_all=1">View all logged items.</a>{% endif %}</td></tr>
+          <tr class="empty">
+            <td colspan="7">
+              {% if show_all %}No review items yet.{% else %}No pending items. <a href="/admin/review?show_all=1">View all logged items.</a>{% endif %}
+            </td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
