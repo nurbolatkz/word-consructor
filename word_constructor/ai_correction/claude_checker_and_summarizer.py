@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 
@@ -12,6 +13,37 @@ except Exception:  # pragma: no cover - optional dependency
     _ANTHROPIC_AVAILABLE = False
 
 from .claude_checker import claude_available, claude_summarize_review_queue
+from .openai_client import SYSTEM_PROMPT as _GPT_CORRECTION_RULES
+
+logger = logging.getLogger(__name__)
+
+CLAUDE_OCCURRENCE_CORRECTION_PROMPT = (
+    "Ты — независимый редактор деловых документов на русском/казахском языке.\n"
+    "Работаешь вторым проходом: первичная AI-система (GPT) уже предложила исправления, "
+    "ты самостоятельно и независимо определяешь правильное значение для каждого вхождения — "
+    "не просто проверяешь GPT, а принимаешь собственное решение. Claude wins on disagreement.\n\n"
+    "Применяй те же правила коррекции:\n\n"
+) + _GPT_CORRECTION_RULES + (
+    "\n\n"
+    "ВАЖНО: Описанный выше OUTPUT FORMAT относится к другой системе. "
+    "Твой формат ответа — JSON, описанный ниже.\n\n"
+    "ТВОЙ ФОРМАТ ОТВЕТА — строго JSON, никакого лишнего текста:\n"
+    "{\n"
+    '  "occurrences": [\n'
+    '    {\n'
+    '      "placeholder": "<ключ>",\n'
+    '      "occurrence_index": <int, 0-based>,\n'
+    '      "corrected_value": "<итоговое значение>",\n'
+    '      "changed": <true если отличается от original_value>\n'
+    "    }\n"
+    "  ],\n"
+    '  "summary": "<один абзац на русском>"\n'
+    "}\n\n"
+    "occurrences — ПОЛНЫЙ список: одна запись на каждое вхождение из входного списка, в том же порядке.\n"
+    "changed — true если corrected_value отличается от original_value (не от gpt_corrected).\n"
+    "summary — краткий абзац: что исправлено и почему, или "
+    "«Все значения уже корректны, изменений не потребовалось.» если ничего не изменилось."
+)
 
 CLAUDE_CORRECT_SYSTEM_PROMPT = """Ты — независимый редактор русского/казахского HR и юридического документа.
 
@@ -176,4 +208,123 @@ def claude_correct_and_review(
     raise RuntimeError(f"Claude correction failed after {max_retries + 1} attempt(s): {last_error}")
 
 
-__all__ = ["claude_available", "claude_correct_and_review", "claude_summarize_review_queue"]
+def claude_correct_occurrences(
+    full_text: str,
+    occurrences: list[dict[str, Any]],
+    gpt_occurrence_values: dict[tuple[str, int], str],
+    prompt_ai: str = "",
+    model: str | None = None,
+    log_key: str | None = None,
+    call_log: dict[str, Any] | None = None,
+    max_retries: int = 1,
+) -> tuple[dict[tuple[str, int], str], str]:
+    """Independent Claude correction pass over all occurrences.
+
+    gpt_occurrence_values: {(placeholder_key, occurrence_1based): corrected_value}
+    Returns: ({(placeholder_key, occurrence_1based): corrected_value}, summary_str)
+    Claude wins on disagreement — its output replaces GPT's per occurrence.
+    """
+    model = model or os.environ.get(
+        "ANTHROPIC_CLAUDE_CORRECTION_MODEL",
+        os.environ.get("ANTHROPIC_CHECKER_MODEL", "claude-sonnet-4-6"),
+    )
+
+    idx_to_1based: dict[tuple[str, int], tuple[str, int]] = {}
+    occurrence_items: list[dict[str, Any]] = []
+    for o in occurrences:
+        key = str(o.get("key") or o.get("placeholder") or "")
+        if not key:
+            continue
+        occ_1 = int(o.get("occurrence") or 0)
+        occ_idx_0 = int(o.get("occurrence_index", 0))
+        original = str(o.get("value") or "")
+        gpt_value = gpt_occurrence_values.get((key, occ_1), original)
+        idx_to_1based[(key, occ_idx_0)] = (key, occ_1)
+        occurrence_items.append({
+            "placeholder": key,
+            "occurrence_index": occ_idx_0,
+            "original_value": original,
+            "gpt_corrected": gpt_value,
+            "context": str(o.get("context") or "")[:300],
+        })
+
+    if not occurrence_items:
+        return {}, "Нет вхождений для проверки."
+
+    user_content: dict[str, Any] = {"template": full_text, "occurrences": occurrence_items}
+    if prompt_ai:
+        user_content["additional_instructions"] = str(prompt_ai)
+    body = json.dumps(user_content, ensure_ascii=False, indent=2)
+
+    logger.info(
+        "Claude occurrence correction: log_key=%s occurrences=%d model=%s",
+        log_key, len(occurrence_items), model,
+    )
+    if call_log is not None:
+        call_log.setdefault("claude_pass", {}).update({
+            "model": model,
+            "occurrence_count": len(occurrence_items),
+        })
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = _client().messages.create(
+                model=model,
+                max_tokens=4000,
+                system=CLAUDE_OCCURRENCE_CORRECTION_PROMPT,
+                messages=[{"role": "user", "content": body}],
+                temperature=0,
+            )
+            raw_text = _response_text(response)
+            logger.info("Claude occurrence response: log_key=%s text=%s", log_key, raw_text[:500])
+
+            parsed = json.loads(_strip_json_fence(raw_text))
+            if not isinstance(parsed, dict):
+                raise ValueError("Claude occurrence response is not a JSON object")
+
+            claude_occs = parsed.get("occurrences")
+            summary = str(parsed.get("summary") or "").strip() or "Claude проверил все вхождения."
+
+            if not isinstance(claude_occs, list):
+                raise ValueError("Claude response missing 'occurrences' array")
+
+            corrections: dict[tuple[str, int], str] = {}
+            for item in claude_occs:
+                if not isinstance(item, dict):
+                    continue
+                ph = str(item.get("placeholder") or "")
+                try:
+                    occ_idx_0 = int(item.get("occurrence_index", 0))
+                except (TypeError, ValueError):
+                    continue
+                corrected = item.get("corrected_value")
+                target = idx_to_1based.get((ph, occ_idx_0))
+                if target and corrected is not None:
+                    corrections[target] = str(corrected)
+
+            changed_count = sum(1 for i in claude_occs if isinstance(i, dict) and i.get("changed"))
+            logger.info("Claude occurrence corrections: log_key=%s changed=%d summary=%s", log_key, changed_count, summary[:120])
+            if call_log is not None:
+                call_log["claude_pass"]["changed_count"] = changed_count
+                call_log["claude_pass"]["summary"] = summary
+
+            return corrections, summary
+
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Claude occurrence correction attempt %d failed: log_key=%s error=%s", attempt, log_key, exc)
+            if call_log is not None:
+                call_log.setdefault("claude_pass", {})["error"] = str(exc)
+            if attempt < max_retries:
+                continue
+
+    raise RuntimeError(f"Claude occurrence correction failed after {max_retries + 1} attempt(s): {last_error}")
+
+
+__all__ = [
+    "claude_available",
+    "claude_correct_and_review",
+    "claude_correct_occurrences",
+    "claude_summarize_review_queue",
+]

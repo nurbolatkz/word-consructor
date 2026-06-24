@@ -57,6 +57,7 @@ from word_constructor.ai_correction.extraction import (
     PLACEHOLDER_RE as _AI_PLACEHOLDER_RE,
     cell_text as _ai_cell_text,
     context_snippet as _ai_context_snippet,
+    document_full_text as _ai_document_full_text,
     document_plain_text as _ai_document_plain_text,
     document_placeholder_scan_text as _ai_document_placeholder_scan_text,
     extract_header_footer_placeholder_occurrences as _ai_extract_header_footer_placeholder_occurrences,
@@ -67,6 +68,8 @@ from word_constructor.ai_correction.extraction import (
     raw_placeholder_matches_from_doc as _ai_raw_placeholder_matches_from_doc,
     sanity_check_occurrence_counts as _ai_sanity_check_occurrence_counts,
 )
+from word_constructor.ai_correction.claude_checker import claude_available as _ai_claude_available
+from word_constructor.ai_correction.claude_checker_and_summarizer import claude_correct_occurrences as _ai_claude_correct_occurrences
 from word_constructor.ai_correction.openai_client import parse_openai_chat_content as _ai_parse_openai_chat_content
 from word_constructor.ai_correction.pipeline import correct_document_two_model as _ai_pipeline_correct_document_two_model
 from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
@@ -1575,9 +1578,16 @@ def _ai_correct_slot_values(
     prompt_ai: str,
     log_key: str | None = None,
     call_log: dict[str, Any] | None = None,
-) -> tuple[dict[str, str], dict[tuple[str, int], str]]:
+) -> tuple[dict[str, str], dict[tuple[str, int], str], str]:
+    """Returns (slot_values, occurrence_values, review_summary).
+
+    Runs GPT pass first, then an independent Claude pass when available.
+    Claude's output replaces GPT's per occurrence. The full exchange
+    is recorded in call_log and persisted to the review queue via
+    enqueue_background_review_log.
+    """
     if not slot_values:
-        return slot_values, {}
+        return slot_values, {}, ""
     try:
         result = _ai_pipeline_correct_slot_values(
             doc,
@@ -1589,7 +1599,6 @@ def _ai_correct_slot_values(
             call_log=call_log,
             timeout_seconds=OPENAI_PLACEHOLDER_TIMEOUT_SECONDS,
         )
-        return result.slot_values, result.occurrence_values
     except Exception as exc:
         logger.exception(
             "AI placeholder correction pipeline failed; using original placeholder values: use_ai_log_key=%s error=%s",
@@ -1598,7 +1607,71 @@ def _ai_correct_slot_values(
         )
         if call_log is not None:
             call_log["error"] = f"AI placeholder correction pipeline failed: {exc}"
-        return slot_values, {}
+        return slot_values, {}, ""
+
+    gpt_occurrence_values = result.occurrence_values
+    final_occurrence_values = gpt_occurrence_values
+    review_summary = ""
+
+    if _ai_claude_available():
+        try:
+            full_text = _ai_document_full_text(doc)
+            claude_corrections, review_summary = _ai_claude_correct_occurrences(
+                full_text=full_text,
+                occurrences=result.occurrences or [],
+                gpt_occurrence_values=gpt_occurrence_values,
+                prompt_ai=prompt_ai,
+                log_key=log_key,
+                call_log=call_log,
+            )
+            # Claude wins on disagreement
+            final_occurrence_values = {**gpt_occurrence_values, **claude_corrections}
+
+            # Persist full GPT+Claude exchange to review queue in background
+            try:
+                gpt_per_key: dict[str, str] = {}
+                for (key, _occ1), val in gpt_occurrence_values.items():
+                    gpt_per_key[key] = val
+                claude_per_key: dict[str, str] = {}
+                for (key, _occ1), val in final_occurrence_values.items():
+                    claude_per_key[key] = val
+                changes_from_gpt = [
+                    {
+                        "placeholder": k,
+                        "gpt_value": gpt_per_key.get(k, ""),
+                        "claude_value": v,
+                        "reason": "Исправлено Claude",
+                    }
+                    for k, v in claude_per_key.items()
+                    if v != gpt_per_key.get(k, "")
+                ]
+                claude_result_for_log = {
+                    "corrected_values": claude_per_key,
+                    "review_summary": {
+                        "had_issues": bool(changes_from_gpt),
+                        "changes_from_gpt": changes_from_gpt,
+                        "note": review_summary,
+                    },
+                }
+                enqueue_background_review_log(
+                    original_params={"template": full_text, "placeholders": dict(slot_values)},
+                    gpt_response=gpt_per_key,
+                    claude_result=claude_result_for_log,
+                    document=full_text,
+                    document_name=str((call_log or {}).get("document_name") or (call_log or {}).get("filename") or ""),
+                    log_key=log_key or "",
+                )
+            except Exception as persist_exc:
+                logger.warning("Failed to persist two-model exchange: use_ai_log_key=%s error=%s", log_key, persist_exc)
+
+        except Exception as exc:
+            logger.warning(
+                "Claude correction pass failed; using GPT output: use_ai_log_key=%s error=%s",
+                log_key, exc,
+            )
+            review_summary = "Проверка Claude недоступна; применены исправления GPT."
+
+    return result.slot_values, final_occurrence_values, review_summary
 
 
 
@@ -3929,8 +4002,9 @@ def api_replace_and_open_edit_session():
         slot_occurrence_values: dict[tuple[str, int], str] = {}
         use_ai_log_key = f"useai-{uuid.uuid4().hex}" if use_ai else None
         use_ai_log: dict[str, Any] | None = {"key": use_ai_log_key} if use_ai_log_key else None
+        review_summary = ""
         if use_ai:
-            slot_values, slot_occurrence_values = _ai_correct_slot_values(
+            slot_values, slot_occurrence_values, review_summary = _ai_correct_slot_values(
                 doc,
                 slot_values,
                 prompt_ai,
@@ -3964,8 +4038,8 @@ def api_replace_and_open_edit_session():
     }
     if use_ai_log_key:
         response_payload["use_ai_log_key"] = use_ai_log_key
-    if use_ai_log:
-        response_payload["use_ai_log"] = use_ai_log
+    if review_summary:
+        response_payload["review_summary"] = review_summary
     return jsonify(response_payload), 201
 
 
