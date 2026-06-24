@@ -145,24 +145,65 @@ def _status_from_request() -> str:
     return str(request.form.get("status") or "").strip()
 
 
+def _extract_note(cr: dict[str, Any]) -> str:
+    """Pull the note string out of checker_result, handling every nested structure."""
+    # Primary path: claude_result.review_summary.note
+    cl = cr.get("claude_result") or {}
+    cl_rs = cl.get("review_summary") or {}
+    if isinstance(cl_rs, dict):
+        note = cl_rs.get("note") or ""
+        if note and isinstance(note, str):
+            return note
+    # Secondary: checker_result.review_summary.note (when stored as dict)
+    rs = cr.get("review_summary") or {}
+    if isinstance(rs, dict):
+        note = rs.get("note") or ""
+        if note and isinstance(note, str):
+            return note
+    # Tertiary: review_summary as plain string
+    if isinstance(rs, str) and rs:
+        return rs
+    return ""
+
+
 def _review_item_display(item: dict[str, Any]) -> dict[str, Any]:
-    """Pre-compute human-readable display fields so the template stays logic-free."""
+    """Pre-compute all human-readable fields. Uses bracket key 'display' (no underscore)."""
+    import re as _re
+
     cr = item.get("checker_result") or {}
-    claude_rs = (cr.get("claude_result") or {}).get("review_summary") or {}
-    originals: dict[str, str] = (cr.get("original_params") or {}).get("placeholders") or {}
-    finals: dict[str, str] = (cr.get("claude_result") or {}).get("corrected_values") or cr.get("gpt_response") or {}
+    cl = cr.get("claude_result") or {}
+    cl_rs = cl.get("review_summary") if isinstance(cl.get("review_summary"), dict) else {}
+    originals: dict[str, str] = {str(k): str(v) for k, v in
+                                  ((cr.get("original_params") or {}).get("placeholders") or {}).items()}
+    # finals: prefer claude corrected_values, fall back to gpt_response
+    finals_raw: dict = cl.get("corrected_values") or cr.get("gpt_response") or {}
+    finals: dict[str, str] = {str(k): str(v) for k, v in finals_raw.items()}
 
-    changes = [
-        {"key": k, "before": str(originals.get(k, "")), "after": str(v)}
-        for k, v in finals.items()
-        if str(originals.get(k, "")) != str(v)
-    ]
-    changes_from_gpt: list[dict] = claude_rs.get("changes_from_gpt") or []
-    note = str(claude_rs.get("note") or cr.get("review_summary") or "")
-    had_issues = bool(claude_rs.get("had_issues") or changes_from_gpt)
+    # Build diff: show every field where final != original (or original unknown)
+    changes = []
+    for k, v in finals.items():
+        before = originals.get(k, "")
+        if before != v:
+            changes.append({"key": k, "before": before, "after": v})
 
-    raw_preview = str(item.get("rendered_preview") or "")
-    preview = raw_preview[:500] + ("…" if len(raw_preview) > 500 else "")
+    changes_from_gpt: list[dict] = cl_rs.get("changes_from_gpt") if isinstance(cl_rs, dict) else []
+    if not isinstance(changes_from_gpt, list):
+        changes_from_gpt = []
+
+    had_issues = bool((cl_rs or {}).get("had_issues") or changes_from_gpt)
+    note = _extract_note(cr)
+
+    # Preview: strip AI context markers like "[table_cell table[0]...]" and show plain text
+    raw = str(item.get("rendered_preview") or "")
+    plain_lines = [ln for ln in raw.splitlines() if not _re.match(r"^\[", ln.strip())]
+    preview = "\n".join(plain_lines).strip()[:400]
+    if len("\n".join(plain_lines).strip()) > 400:
+        preview += "…"
+
+    # Document title: prefer stored name, fall back to log_key
+    doc_title = str(item.get("document_name") or "").strip()
+    if not doc_title:
+        doc_title = str(item.get("log_key") or "").strip()
 
     return {
         "had_issues": had_issues,
@@ -170,6 +211,7 @@ def _review_item_display(item: dict[str, Any]) -> dict[str, Any]:
         "changes_from_gpt": changes_from_gpt,
         "changes": changes,
         "preview": preview,
+        "doc_title": doc_title,
     }
 
 
@@ -180,7 +222,7 @@ def review_queue_page():
     all_items = load_review_items()
     items = all_items if show_all else [i for i in all_items if i.get("status") == "pending"]
     for item in items:
-        item["_display"] = _review_item_display(item)
+        item["display"] = _review_item_display(item)
     return render_template("review_queue.html", items=items, show_all=show_all, total_count=len(all_items))
 
 
