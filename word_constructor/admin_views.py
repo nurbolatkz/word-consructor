@@ -186,9 +186,19 @@ def _review_item_display(item: dict[str, Any]) -> dict[str, Any]:
         if before != v:
             changes.append({"key": k, "before": before, "after": v})
 
-    changes_from_gpt: list[dict] = cl_rs.get("changes_from_gpt") if isinstance(cl_rs, dict) else []
-    if not isinstance(changes_from_gpt, list):
-        changes_from_gpt = []
+    raw_cfg: list = cl_rs.get("changes_from_gpt") if isinstance(cl_rs, dict) else []
+    if not isinstance(raw_cfg, list):
+        raw_cfg = []
+    # Normalise keys so the template always gets placeholder/gpt_value/claude_value/reason
+    changes_from_gpt = [
+        {
+            "placeholder": str(c.get("placeholder") or c.get("key") or ""),
+            "gpt_value":   str(c.get("gpt_value")   or c.get("before") or ""),
+            "claude_value": str(c.get("claude_value") or c.get("after")  or ""),
+            "reason":      str(c.get("reason") or ""),
+        }
+        for c in raw_cfg if isinstance(c, dict)
+    ]
 
     had_issues = bool((cl_rs or {}).get("had_issues") or changes_from_gpt)
     note = _extract_note(cr)

@@ -130,10 +130,10 @@
           <div class="section-label" style="margin-top:14px">Переопределено Claude</div>
           {% for ov in overrides %}
           <div class="override-item">
-            <strong>{{ ov.get('placeholder', ov.get('key', '?')) }}</strong>:
-            <span class="diff-before">{{ ov.get('gpt_value', '') }}</span>
-            → <span class="diff-after">{{ ov.get('claude_value', '') }}</span>
-            {% if ov.get('reason') %}<div class="reason">{{ ov.reason }}</div>{% endif %}
+            <strong>{{ ov.placeholder }}</strong>:
+            <span class="diff-before">{{ ov.gpt_value }}</span>
+            → <span class="diff-after">{{ ov.claude_value }}</span>
+            {% if ov.reason %}<div class="reason">{{ ov.reason }}</div>{% endif %}
           </div>
           {% endfor %}
         {% endif %}
