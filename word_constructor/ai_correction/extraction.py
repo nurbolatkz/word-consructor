@@ -7,6 +7,7 @@ from docx import Document
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from .governing import detect_case_for_placeholder
 from .types import Occurrence, SanityCheck, TextUnit
 from .rules import RulesConfig, department_rule, is_department_placeholder
 
@@ -114,6 +115,20 @@ def document_full_text(doc: Document) -> str:
 
 def document_placeholder_scan_text(doc: Document) -> str:
     return "\n".join(unit.text for unit in iter_text_units(doc) if unit.text.strip())
+
+
+
+
+def placeholder_sentence_sides(text: str, match: re.Match) -> tuple[str, str]:
+    before_text = text[:match.start()]
+    after_text = text[match.end():]
+    before_boundary = max(before_text.rfind(ch) for ch in (".", "!", "?", "\n", "\r", ";", ":"))
+    if before_boundary >= 0:
+        before_text = before_text[before_boundary + 1:]
+    after_candidates = [idx for idx in (after_text.find(ch) for ch in (".", "!", "?", "\n", "\r", ";")) if idx >= 0]
+    if after_candidates:
+        after_text = after_text[:min(after_candidates)]
+    return before_text, after_text
 
 
 def context_snippet(text: str, match: re.Match, window: int = _CONTEXT_CHARS_DEFAULT) -> str:
@@ -286,6 +301,8 @@ def extract_placeholder_occurrences(doc: Document, slot_values: dict[str, str], 
             counts[key] = occurrence_index + 1
             value = str(slot_values[key])
             context = context_snippet(unit.text, match)
+            text_before, text_after = placeholder_sentence_sides(unit.text, match)
+            detected_case, case_note = detect_case_for_placeholder(text_before, text_after)
             ai_excluded = is_signature_or_approval_table_cell(unit, key, value)
             signature_title = ai_excluded and looks_like_signature_title(value)
             fixed_department = is_department_placeholder(key, rules)
@@ -311,6 +328,10 @@ def extract_placeholder_occurrences(doc: Document, slot_values: dict[str, str], 
                 fixed_form=fixed_department,
                 never_merge_with_adjacent_occurrence=bool(dept_rule.get("never_merge_with_adjacent_occurrence")) if fixed_department else False,
                 preserve_internal_abbreviations=bool(dept_rule.get("preserve_internal_abbreviations")) if fixed_department else False,
+                text_before=text_before,
+                text_after=text_after,
+                detected_case=detected_case.value,
+                case_detection_note=case_note,
             ))
     _mark_adjacent_occurrences(occurrences)
     _mark_redundant_adjacent_occurrences(occurrences)

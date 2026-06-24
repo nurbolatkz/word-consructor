@@ -8,6 +8,7 @@ from flask import Flask, jsonify, redirect, request
 from flask_sock import Sock
 
 from sign_document import sign_document
+from word_constructor.admin_views import admin_reviews
 
 from word_constructor.app import (
     client_api_index_response,
@@ -48,6 +49,7 @@ def create_app() -> Flask:
 
     app.register_blueprint(word_constructor, url_prefix="/services/word-constructor")
     app.register_blueprint(sign_document, url_prefix="/sign_document")
+    app.register_blueprint(admin_reviews, url_prefix="/admin")
     sock = Sock(app)
 
     @app.get("/")

@@ -41,6 +41,10 @@ class Occurrence:
     preserve_internal_abbreviations: bool = False
     adjacent_occurrence_ids: list[str] = field(default_factory=list)
     redundant_in: str = ""
+    text_before: str = ""
+    text_after: str = ""
+    detected_case: str = ""
+    case_detection_note: str = ""
 
     def __post_init__(self) -> None:
         if not self.key:
@@ -79,6 +83,10 @@ class Occurrence:
             "preserve_internal_abbreviations": self.preserve_internal_abbreviations,
             "adjacent_occurrence_ids": list(self.adjacent_occurrence_ids),
             "redundant_in": self.redundant_in,
+            "text_before": self.text_before,
+            "text_after": self.text_after,
+            "detected_case": self.detected_case,
+            "case_detection_note": self.case_detection_note,
         }
 
 

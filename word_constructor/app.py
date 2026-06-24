@@ -68,8 +68,10 @@ from word_constructor.ai_correction.extraction import (
     sanity_check_occurrence_counts as _ai_sanity_check_occurrence_counts,
 )
 from word_constructor.ai_correction.openai_client import parse_openai_chat_content as _ai_parse_openai_chat_content
+from word_constructor.ai_correction.pipeline import correct_document_two_model as _ai_pipeline_correct_document_two_model
 from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
 from word_constructor.ai_correction.pipeline import startup_health as ai_correction_startup_health
+from word_constructor.admin_views import enqueue_background_review_log
 
 logger = logging.getLogger(__name__)
 
@@ -3742,6 +3744,39 @@ def api_template_build():
     )
 
 
+_JSON_REPLACE_RESERVED_KEYS = {
+    "filename",
+    "name",
+    "content_base64",
+    "base64",
+    "content",
+    "params",
+    "placeholders",
+    "values",
+    "UseAI",
+    "use_ai",
+    "ИспользоватьAI",
+    "PromtAI",
+    "PromptAI",
+    "prompt_ai",
+}
+
+
+def _replace_values_from_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    parsed = payload.get("params", payload.get("placeholders", payload.get("values")))
+    if parsed is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        raise ValueError("'params'/'placeholders' must be a JSON object")
+
+    values = dict(parsed)
+    for key, value in payload.items():
+        if str(key) in _JSON_REPLACE_RESERVED_KEYS:
+            continue
+        values.setdefault(str(key), value)
+    return values
+
+
 def _parse_replace_payload() -> tuple[str, bytes, dict[str, str], dict[str, list], dict[str, list[dict[str, str]]]]:
     if request.is_json:
         payload = request.get_json(silent=True) or {}
@@ -3755,7 +3790,7 @@ def _parse_replace_payload() -> tuple[str, bytes, dict[str, str], dict[str, list
         if not content_base64:
             raise ValueError("Missing 'content_base64'")
         content = _safe_b64decode(content_base64)
-        parsed = payload.get("params", payload.get("placeholders", payload.get("values", {})))
+        parsed = _replace_values_from_json_payload(payload)
     else:
         upload = (
             request.files.get("template")
@@ -3815,14 +3850,33 @@ def api_replace_docx_placeholders():
     """
     try:
         filename, template_bytes, slot_values, table_params, table_object_params = _parse_replace_payload()
-        Document(BytesIO(template_bytes))
-        result_bytes = fill_docx(template_bytes, slot_values, table_params, table_object_params=table_object_params)
+        doc = Document(BytesIO(template_bytes))
+        ai_result = _ai_pipeline_correct_document_two_model(
+            doc,
+            slot_values,
+            "",
+            log_key=f"replace-{uuid.uuid4().hex}",
+            call_log={"document_name": filename},
+        )
+        final_values = ai_result.get("final_values") or slot_values
+        review_payload = ai_result.get("review_payload")
+        result_bytes = fill_docx(template_bytes, final_values, table_params, table_object_params=table_object_params)
     except json.JSONDecodeError as exc:
         return jsonify({"error": f"Invalid JSON params: {exc}"}), 400
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": f"Cannot replace placeholders: {exc}"}), 400
+
+    if review_payload is not None:
+        enqueue_background_review_log(
+            review_payload.get("original_params", {}),
+            review_payload.get("gpt_response", {}),
+            review_payload.get("claude_result", {}),
+            str(review_payload.get("rendered_preview") or ""),
+            document_name=filename,
+            log_key=str(review_payload.get("log_key") or ""),
+        )
 
     return send_file(
         BytesIO(result_bytes),
@@ -3905,7 +3959,7 @@ def api_replace_and_open_edit_session():
         "editor_url": f"{base}/template-builder/{session_id}?source=from1c",
         "status_url": f"{base}/api/1c/edit-sessions/{session_id}/status",
         "update_url": f"{base}/api/1c/edit-sessions/{session_id}/document",
-        "download_url": f"{base}/api/1c/edit-sessions/{session_id}/document",
+        "download_url": f"{base}/api/1c/edit-sessions/{session_id}/document?forcesave=0",
         "expires_at": meta["expires_at_iso"],
     }
     if use_ai_log_key:
@@ -3941,7 +3995,11 @@ def _force_save_session_document(session_id: str, meta: dict) -> tuple[bool, dic
     if not path.exists():
         return False, None, "Document file not found"
 
-    key = str(meta.get("editor_key") or _builder_editor_key(session_id, path))
+    editor_key = meta.get("editor_key")
+    if not editor_key:
+        return True, {"skipped": True, "reason": "OnlyOffice editor was not opened"}, None
+
+    key = str(editor_key)
     previous_saved_at = meta.get("last_saved_at")
     try:
         result = _builder_forcesave(session_id, key)

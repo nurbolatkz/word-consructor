@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rule Candidates</title>
+</head>
+<body>
+  <h1>Rule Candidates</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Summary</th>
+        <th>Count</th>
+        <th>Created</th>
+        <th>Status</th>
+        <th>Claude</th>
+        <th>Examples</th>
+        <th>Decision</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for candidate in candidates %}
+      <tr data-id="{{ candidate.id }}">
+        <td>{{ candidate.candidate_type }}</td>
+        <td>{{ candidate.pattern_summary }}</td>
+        <td>{{ candidate.occurrence_count }}</td>
+        <td>{{ candidate.created_at }}</td>
+        <td>{{ candidate.status }}</td>
+        <td>
+          {% if candidate.claude_recommendation %}
+            <pre>{{ candidate.claude_recommendation | tojson(indent=2) }}</pre>
+          {% else %}
+            Рекомендация Claude ещё не сформирована для этого кандидата
+          {% endif %}
+        </td>
+        <td><pre>{{ candidate.example_contexts | tojson(indent=2) }}</pre></td>
+        <td>
+          <button type="button" onclick="decideCandidate('{{ candidate.id }}', 'approved')">Approve</button>
+          <button type="button" onclick="decideCandidate('{{ candidate.id }}', 'rejected')">Reject</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8">No rule candidates.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <script>
+    async function decideCandidate(id, status) {
+      const res = await fetch(`/admin/rule-candidates/${id}/decide`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({status})
+      });
+      if (!res.ok) throw new Error(await res.text());
+      location.reload();
+    }
+  </script>
+</body>
+</html>

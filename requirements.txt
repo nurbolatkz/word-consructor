@@ -6,3 +6,4 @@ python-docx>=1.1,<2
 PyJWT>=2,<3
 num2words>=0.5,<1
 pymorphy3>=2,<3
+anthropic>=0.40,<1

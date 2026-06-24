@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Review Queue</title>
+</head>
+<body>
+  <h1>AI Review Queue</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>Document</th>
+        <th>Log key</th>
+        <th>Timestamp</th>
+        <th>Status</th>
+        <th>Checker</th>
+        <th>Preview</th>
+        <th>Corrections</th>
+        <th>Decision</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr data-id="{{ item.id }}">
+        <td>{{ item.document_name }}</td>
+        <td>{{ item.log_key }}</td>
+        <td>{{ item.timestamp }}</td>
+        <td>{{ item.status }}</td>
+        <td><pre>{{ item.checker_result | tojson(indent=2) }}</pre></td>
+        <td><pre>{{ item.rendered_preview }}</pre></td>
+        <td><pre>{{ item.corrections | tojson(indent=2) }}</pre></td>
+        <td>
+          <button type="button" onclick="submitReview('{{ item.id }}', 'approved')">Approve</button>
+          <button type="button" onclick="submitReview('{{ item.id }}', 'rejected')">Reject</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8">No review items.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <script>
+    async function submitReview(id, status) {
+      const res = await fetch(`/admin/review/${id}/decide`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({status})
+      });
+      if (!res.ok) throw new Error(await res.text());
+      location.reload();
+    }
+  </script>
+</body>
+</html>
