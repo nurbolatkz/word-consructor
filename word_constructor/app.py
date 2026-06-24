@@ -75,6 +75,7 @@ from word_constructor.ai_correction.pipeline import correct_document_two_model a
 from word_constructor.ai_correction.pipeline import correct_slot_values as _ai_pipeline_correct_slot_values
 from word_constructor.ai_correction.pipeline import startup_health as ai_correction_startup_health
 from word_constructor.admin_views import enqueue_background_review_log
+from word_constructor.admin_storage import load_review_items as _load_review_items
 
 logger = logging.getLogger(__name__)
 
@@ -2144,6 +2145,10 @@ def admin_cabinet():
     new_token = session.pop("new_client_token", None)
     password_message = session.pop("password_message", "")
     password_error = session.pop("password_error", "")
+    try:
+        pending_review_count = sum(1 for item in _load_review_items() if item.get("status") == "pending")
+    except Exception:
+        pending_review_count = 0
     return render_template(
         "word_constructor/admin_cabinet.html",
         clients=clients,
@@ -2151,6 +2156,7 @@ def admin_cabinet():
         admin_username=os.environ.get("ADMIN_USERNAME", "admin"),
         password_message=password_message,
         password_error=password_error,
+        pending_review_count=pending_review_count,
     )
 
 

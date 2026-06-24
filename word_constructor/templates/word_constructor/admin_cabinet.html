@@ -34,7 +34,11 @@
     .muted { color:var(--muted); }
     .num { font-variant-numeric:tabular-nums; white-space:nowrap; }
     .path { max-width:260px; word-break:break-all; }
-    @media (max-width:820px) { .shell { padding:16px; } .grid { grid-template-columns:1fr; } table { display:block; overflow:auto; } }
+    .nav-links { display:flex; gap:8px; align-items:center; }
+    .nav-links a { display:inline-flex; align-items:center; gap:6px; text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; color:var(--accent); background:var(--surface); }
+    .nav-links a:hover { background:#eef2f6; }
+    .badge { display:inline-block; background:var(--err); color:#fff; border-radius:999px; padding:1px 7px; font-size:11px; font-weight:700; min-width:18px; text-align:center; }
+    @media (max-width:820px) { .shell { padding:16px; } .grid { grid-template-columns:1fr; } table { display:block; overflow:auto; } .topbar { flex-wrap:wrap; } }
   </style>
 </head>
 <body>
@@ -43,6 +47,12 @@
       <div>
         <h1>Admin cabinet</h1>
         <p class="sub">Logged in as {{ admin_username }}. Manage service clients and token usage.</p>
+      </div>
+      <div class="nav-links">
+        <a href="/admin/review">
+          Review queue{% if pending_review_count %} <span class="badge">{{ pending_review_count }}</span>{% endif %}
+        </a>
+        <a href="/admin/rule-candidates">Rule candidates</a>
       </div>
       <form method="post" action="/services/word-constructor/admin/logout"><button class="secondary" type="submit">Log out</button></form>
     </div>
