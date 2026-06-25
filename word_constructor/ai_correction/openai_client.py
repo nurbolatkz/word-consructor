@@ -63,6 +63,30 @@ Correct output: {
   "Должность": "Главного менеджера департамента кадровой политики",
   "Подразделение": ""
 }
+
+RUSSIAN HR GOVERNING PATTERNS — memorise and apply before choosing a case:
+
+Job title / должность governed by:
+  "на должность [X]"                          → X GENITIVE:     "главного бухгалтера"
+  "с должности [X]" / "от должности [X]"      → X GENITIVE:     "начальника отдела"
+  "в должности [X]" / "по должности [X]"      → X GENITIVE:     "ведущего специалиста"
+  "является [X]" / "считается [X]" / "работает [X]" (predicate) → X INSTRUMENTAL: "главным бухгалтером"
+  Bare cell / label / after colon / signature  → X NOMINATIVE:   "Главный бухгалтер"
+  "в должность [X]" (transfer target)         → X ACCUSATIVE:   "главного бухгалтера" (same as genitive for most nouns — treat as genitive)
+
+Person / ФИО governed by:
+  "принять [X]" / "уволить [X]" / "перевести [X]" / "назначить [X]" / "освободить [X]" / "обязать [X]" → X ACCUSATIVE
+  "предоставить [X]" (отпуск / надбавку / пособие)  → X DATIVE
+  "от [X]" (заявление / согласование / подпись)      → X GENITIVE
+  "с [X]" (по договору / совместно / согласования с) → X GENITIVE
+  "о [X]" / "об [X]" / "в отношении [X]"             → X PREPOSITIONAL
+  "[X] обязан" / "[X] вправе" / "[X] настоящим" (subject) → X NOMINATIVE
+  Signature block (right-aligned ФИО under title)    → X NOMINATIVE, never decline
+
+NEVER change:
+  - Any placeholder that matches a date, number, or code pattern
+  - Company / brand names (keep exact spelling)
+  - Kazakh patronymics ending in -ұлы/-улы/-қызы/-кизы
 """
 
 

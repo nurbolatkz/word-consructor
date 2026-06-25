@@ -21,19 +21,19 @@ from .rules import load_rules_config
 logger = logging.getLogger(__name__)
 
 CLAUDE_OCCURRENCE_CORRECTION_PROMPT = (
-    "Ты — независимый редактор деловых документов на русском/казахском языке.\n"
-    "Работаешь вторым проходом: первичная AI-система (GPT) уже предложила исправления, "
-    "ты самостоятельно и независимо определяешь правильное значение для каждого вхождения — "
-    "не просто проверяешь GPT, а принимаешь собственное решение. Claude wins on disagreement.\n\n"
-    "Применяй те же правила коррекции:\n\n"
+    "Ты — редактор деловых документов на русском/казахском языке.\n"
+    "Для каждого вхождения плейсхолдера самостоятельно определи грамматически правильное значение "
+    "с учётом контекста: управляющий глагол или предлог, позиция в документе (тело/подпись/таблица).\n\n"
+    "Правила коррекции:\n\n"
 ) + _GPT_CORRECTION_RULES + (
     "\n\n"
-    "ВАЖНО: Описанный выше OUTPUT FORMAT относится к другой системе. "
-    "Ты должен вызвать инструмент corrected_occurrences со списком всех вхождений.\n\n"
+    "ФОРМАТ ОТВЕТА: вызови инструмент corrected_occurrences.\n\n"
     "occurrences — ПОЛНЫЙ список: одна запись на каждое вхождение из входного списка, в том же порядке.\n"
-    "changed — true если corrected_value отличается от original_value (не от gpt_corrected).\n"
-    "summary — краткий абзац: что исправлено и почему, или "
-    "«Все значения уже корректны, изменений не потребовалось.» если ничего не изменилось."
+    "reference_value (если присутствует): ранее предложенное значение — учти его как подсказку, но "
+    "принимай собственное решение.\n"
+    "changed — true если corrected_value отличается от original_value.\n"
+    "summary — один абзац: что исправлено и почему, или "
+    "«Все значения уже корректны.» если ничего не изменилось."
 )
 
 CLAUDE_CORRECT_SYSTEM_PROMPT = """Ты — независимый редактор русского/казахского HR и юридического документа.
@@ -155,7 +155,7 @@ def claude_correct_values(
     """
     model = model or os.environ.get(
         "ANTHROPIC_CLAUDE_CORRECTION_MODEL",
-        os.environ.get("ANTHROPIC_CHECKER_MODEL", "claude-sonnet-4-6"),
+        os.environ.get("ANTHROPIC_CHECKER_MODEL", "claude-haiku-4-5-20251001"),
     )
 
     rules_ctx = _rules_context(load_rules_config())
@@ -305,7 +305,7 @@ def claude_correct_and_review(
     original_params: dict[str, Any],
     gpt_response: dict[str, str],
     known_pitfalls: list[dict[str, Any]] | None = None,
-    model: str = "claude-sonnet-4-6",
+    model: str = "claude-haiku-4-5-20251001",
     max_retries: int = 1,
 ) -> dict[str, Any]:
     template = str(original_params.get("template") or "")
@@ -401,7 +401,7 @@ def claude_correct_occurrences(
     log_key: str | None = None,
     call_log: dict[str, Any] | None = None,
     max_retries: int = 1,
-    timeout_seconds: float = 50.0,
+    timeout_seconds: float = 15.0,
 ) -> tuple[dict[tuple[str, int], str], str]:
     """Independent Claude correction pass over all occurrences.
 
@@ -411,7 +411,7 @@ def claude_correct_occurrences(
     """
     model = model or os.environ.get(
         "ANTHROPIC_CLAUDE_CORRECTION_MODEL",
-        os.environ.get("ANTHROPIC_CHECKER_MODEL", "claude-sonnet-4-6"),
+        os.environ.get("ANTHROPIC_CHECKER_MODEL", "claude-haiku-4-5-20251001"),
     )
 
     idx_to_1based: dict[tuple[str, int], tuple[str, int]] = {}
@@ -423,15 +423,18 @@ def claude_correct_occurrences(
         occ_1 = int(o.get("occurrence") or 0)
         occ_idx_0 = int(o.get("occurrence_index", 0))
         original = str(o.get("value") or "")
-        gpt_value = gpt_occurrence_values.get((key, occ_1), original)
+        ref_value = gpt_occurrence_values.get((key, occ_1), original)
         idx_to_1based[(key, occ_idx_0)] = (key, occ_1)
-        occurrence_items.append({
+        item: dict[str, Any] = {
             "placeholder": key,
             "occurrence_index": occ_idx_0,
             "original_value": original,
-            "gpt_corrected": gpt_value,
             "context": str(o.get("context") or "")[:300],
-        })
+        }
+        # Only include reference_value when it differs (keeps payload clean for primary-mode runs)
+        if ref_value != original:
+            item["reference_value"] = ref_value
+        occurrence_items.append(item)
 
     if not occurrence_items:
         return {}, "Нет вхождений для проверки."

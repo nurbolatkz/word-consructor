@@ -93,6 +93,48 @@
       "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
       "context_pattern": "(?:назначить|перевести)[\\s\\S]{0,120}\\[{placeholder}\\]",
       "case": "accs"
+    },
+    {
+      "id": "name_osvobodit",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
+      "context_pattern": "(?:освободить|отстранить)[\\s\\S]{0,120}\\[{placeholder}\\]",
+      "case": "accs"
+    },
+    {
+      "id": "name_ob_uvolnenii",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
+      "context_pattern": "(?:об\\s+увольнении|о\\s+прекращении|о\\s+расторжении)[\\s\\S]{0,60}\\[{placeholder}\\]",
+      "case": "gent"
+    },
+    {
+      "id": "name_o_perevode",
+      "placeholder_name_pattern": ".*(ФИО|Сотрудник|Employee).*",
+      "context_pattern": "(?:о\\s+переводе|о\\s+назначении|о\\s+приёме|о\\s+приеме)[\\s\\S]{0,60}\\[{placeholder}\\]",
+      "case": "gent"
+    },
+    {
+      "id": "title_na_dolzhnost",
+      "placeholder_name_pattern": ".*(Должность|Title|Позиция|Position).*",
+      "context_pattern": "на\\s+должность\\s+\\[{placeholder}\\]",
+      "case": "gent"
+    },
+    {
+      "id": "title_s_dolzhnosti",
+      "placeholder_name_pattern": ".*(Должность|Title|Позиция|Position).*",
+      "context_pattern": "(?:с\\s+должности|от\\s+должности)\\s+\\[{placeholder}\\]",
+      "case": "gent"
+    },
+    {
+      "id": "title_v_dolzhnosti",
+      "placeholder_name_pattern": ".*(Должность|Title|Позиция|Position).*",
+      "context_pattern": "(?:в\\s+должности|по\\s+должности)\\s+\\[{placeholder}\\]",
+      "case": "gent"
+    },
+    {
+      "id": "title_yavlyaetsya",
+      "placeholder_name_pattern": ".*(Должность|Title|Позиция|Position).*",
+      "context_pattern": "(?:является|считается|работает|состоит)[\\s\\S]{0,30}\\[{placeholder}\\]",
+      "case": "ablt"
     }
   ],
   "department_name_rules": {
