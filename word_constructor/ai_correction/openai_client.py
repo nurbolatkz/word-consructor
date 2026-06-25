@@ -27,12 +27,37 @@ STEP 2 — Read the rendered result as a human proofreader would. Identify:
   a) grammatical case errors (wrong ending for the role the word plays in the sentence, e.g. after "принять [кого]", "на должность [кого]")
   b) capitalization errors (job titles lowercase mid-sentence unless they contain a proper noun/acronym; department names follow their own established capitalization)
   c) DUPLICATION: if two adjacent or nearby placeholders produce repeated or overlapping text once substituted, this reads as broken and must be fixed.
-STEP 2.5 — Apply signature/no-governing-context safeguards before changing case:
-  - If a placeholder appears without a surrounding sentence, with no nearby verb or preposition that clearly requires a case, treat it as nominative. Typical examples are signature rows like "[Должность]    [ФИО]" at the end of a document, a cell containing only "[РеквизитыРуководительФИО]", or a bare label placeholder.
-  - NEVER decline ФИО in such a bare/signature position. Keep nominative form from the input, correcting only obvious casing/typos, not case.
-  - NEVER abbreviate, shorten, or rewrite ФИО. Do not turn "Есжанова Зарина Серикалиевна" into "Есжанова З.С." or any other abbreviation. That is a content change and is forbidden.
-  - Job titles in such positions also stay nominative; apply only capitalization rules, not case endings.
-  - If case is ambiguous because the visible context has no clear governing verb/preposition, do not guess. Return the input case unchanged, with only casing/typo fixes if needed. It is better to leave case unchanged than to choose instrumental/genitive unpredictably.
+STEP 2.5 — Signature/label/initials safeguards (apply before choosing case or format):
+
+  A. SIGNATURE / BARE-LABEL position (no governing verb or preposition visible):
+     - Treat as NOMINATIVE. Do not decline.
+     - Job titles in such positions also stay nominative; apply only capitalization fixes.
+     - If case is ambiguous (no clear governing verb), do not guess. Return input unchanged.
+
+  B. FULL NAME vs INITIALS FORMAT — determined by PLACEHOLDER NAME:
+     Initials format is required when the placeholder name matches any of these patterns:
+       *Инициалы*, *Инициал*, *Init*, *КраткоеФИО*, *ФИОКраткое*, *ФИОСокр*, *ShortName*
+       Examples: "РуководительИнициалы", "ПодписантИнициалы", "ИнициалыСотрудника"
+     Otherwise → FULL NAME. Do NOT abbreviate unless the placeholder name signals initials.
+
+     INITIALS CONVERSION RULES (apply only when placeholder name signals initials):
+       Russian 3-word "Фамилия Имя Отчество":
+         → "Фамилия И.О."  (surname + name-initial dot + patronymic-initial dot, no spaces between initials)
+         → "Иванова Зарина Серикалиевна" → "Иванова З.С."
+         → "Садыков Нурлан Бекович" → "Садыков Н.Б."
+       Kazakh name with patronymic suffix (-ұлы/-улы/-қызы/-кизы):
+         → "Фамилия И." (surname + name initial only; never abbreviate the patronymic suffix)
+         → "Садық Ермек Жәнібекұлы" → "Садық Е."
+       If value is ALREADY in initials format ("Иванова З.С.") → keep as-is, only fix dots/spacing
+       If value has 1–2 words → keep as-is (cannot reliably produce initials)
+       Still apply the correct grammatical case even in initials format:
+         "принять Иванову З.С." (accusative), "от Ивановой З.С." (genitive)
+
+  C. "И.О." ACTING PREFIX (Исполняющий обязанности) — DO NOT confuse with initials:
+     When "И.О." appears before a job title ("И.О. директора", "И.О. главного бухгалтера"):
+     → Preserve "И.О." exactly with both dots; decline only the title part that follows
+     → NEVER expand "И.О." to full phrase, NEVER remove the dots
+     → "И.О. директора" stays "И.О. директора" (only case-inflect "директора")
 STEP 3 — Apply fixes by adjusting PLACEHOLDER VALUES only; never restructure the template text itself. For duplication specifically, follow this FIXED POLICY:
   - Identify which of the two placeholders contains the more complete / more specific text, usually the one with more words or more specific role info.
   - Keep the more specific one's value as-is, only grammar-corrected.
@@ -83,10 +108,18 @@ Person / ФИО governed by:
   "[X] обязан" / "[X] вправе" / "[X] настоящим" (subject) → X NOMINATIVE
   Signature block (right-aligned ФИО under title)    → X NOMINATIVE, never decline
 
+CAPITALIZATION RULES for KZ/RU official documents:
+  Job title in BODY TEXT sentence  → sentence case: "главный бухгалтер", "начальник отдела кадров"
+  Job title in LABEL / HEADER / SIGNATURE cell → preserve input capitalisation (do not force lowercase)
+    "Главный бухгалтер" stays "Главный бухгалтер"; "ДИРЕКТОР" stays "ДИРЕКТОР"
+  ABBREVIATIONS inside any value (HR, IT, ТОО, АО, ДБО, ВОАД, АУП, КПП) → always ALL CAPS
+  Sentence-start → first word is capitalised, the rest follow their natural case
+
 NEVER change:
   - Any placeholder that matches a date, number, or code pattern
   - Company / brand names (keep exact spelling)
   - Kazakh patronymics ending in -ұлы/-улы/-қызы/-кизы
+  - The "И.О." acting prefix — preserve both dots and spacing exactly
 """
 
 
@@ -107,6 +140,10 @@ def _rules_context(rules: Any) -> str:
     preserve = rules.get("preserve_code_placeholder_patterns") or []
     if preserve:
         lines.append("Плейсхолдеры с именами по шаблонам " + str(preserve) + " — не изменять (коды/номера)")
+
+    initials = rules.get("initials_placeholder_patterns") or []
+    if initials:
+        lines.append("Плейсхолдеры инициалов " + str(initials) + " — формат «Фамилия И.О.» (или «Фамилия И.» для казахских имён с -ұлы/-қызы)")
 
     for phrase in rules.get("governing_phrases") or []:
         pid = phrase.get("id", "")
