@@ -29,19 +29,7 @@ CLAUDE_OCCURRENCE_CORRECTION_PROMPT = (
 ) + _GPT_CORRECTION_RULES + (
     "\n\n"
     "ВАЖНО: Описанный выше OUTPUT FORMAT относится к другой системе. "
-    "Твой формат ответа — JSON, описанный ниже.\n\n"
-    "ТВОЙ ФОРМАТ ОТВЕТА — строго JSON, никакого лишнего текста:\n"
-    "{\n"
-    '  "occurrences": [\n'
-    '    {\n'
-    '      "placeholder": "<ключ>",\n'
-    '      "occurrence_index": <int, 0-based>,\n'
-    '      "corrected_value": "<итоговое значение>",\n'
-    '      "changed": <true если отличается от original_value>\n'
-    "    }\n"
-    "  ],\n"
-    '  "summary": "<один абзац на русском>"\n'
-    "}\n\n"
+    "Ты должен вызвать инструмент corrected_occurrences со списком всех вхождений.\n\n"
     "occurrences — ПОЛНЫЙ список: одна запись на каждое вхождение из входного списка, в том же порядке.\n"
     "changed — true если corrected_value отличается от original_value (не от gpt_corrected).\n"
     "summary — краткий абзац: что исправлено и почему, или "
@@ -62,6 +50,33 @@ CLAUDE_CORRECT_SYSTEM_PROMPT = """Ты — независимый редакто
 
 Claude wins on disagreement."""
 
+# Tool schema for claude_correct_occurrences — occurrences have a fixed structure so
+# no key-mapping is needed here.
+_OCCURRENCE_TOOL: dict[str, Any] = {
+    "name": "corrected_occurrences",
+    "description": "Return all occurrence corrections.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "occurrences": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "placeholder": {"type": "string"},
+                        "occurrence_index": {"type": "integer"},
+                        "corrected_value": {"type": "string"},
+                        "changed": {"type": "boolean"},
+                    },
+                    "required": ["placeholder", "occurrence_index", "corrected_value", "changed"],
+                },
+            },
+            "summary": {"type": "string"},
+        },
+        "required": ["occurrences", "summary"],
+    },
+}
+
 
 def _strip_json_fence(raw_text: str) -> str:
     text = raw_text.strip()
@@ -79,11 +94,9 @@ def _strip_json_fence(raw_text: str) -> str:
 
 def _extract_json_object(text: str) -> str:
     """Find the first {...} JSON object in text, even when Claude adds prose around it."""
-    # Try the whole text first
     stripped = _strip_json_fence(text)
     if stripped.startswith("{"):
         return stripped
-    # Find the first { ... } block
     match = _re.search(r"\{.*\}", text, _re.DOTALL)
     if match:
         return match.group(0)
@@ -100,10 +113,32 @@ def _response_text(response: Any) -> str:
     return "".join(parts).strip()
 
 
+def _extract_tool_input(response: Any) -> Any:
+    """Extract the input dict from the first tool_use block in a Claude response."""
+    for block in getattr(response, "content", []) or []:
+        if getattr(block, "type", None) == "tool_use":
+            return getattr(block, "input", None)
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            return block.get("input")
+    return None
+
+
 def _client() -> Any:
     if not _ANTHROPIC_AVAILABLE or Anthropic is None:
         raise RuntimeError("anthropic package is not installed")
     return Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY") or None)
+
+
+def _safe_key_map(keys: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """Map arbitrary keys to ASCII-safe names for Claude tool schemas.
+
+    Claude tool schema property keys must match ^[a-zA-Z0-9_.-]{1,64}$, but
+    placeholder names are often Cyrillic (e.g. ДолжностьЗамещающего).
+    We use slot_N indices and include the original name in each property description.
+    """
+    orig_to_safe = {k: f"slot_{i}" for i, k in enumerate(keys)}
+    safe_to_orig = {v: k for k, v in orig_to_safe.items()}
+    return orig_to_safe, safe_to_orig
 
 
 def claude_correct_values(
@@ -128,9 +163,15 @@ def claude_correct_values(
     if rules_ctx:
         system += "\n\nSystem rules from configuration:\n" + rules_ctx
 
+    orig_keys = list(slot_values.keys())
+    orig_to_safe, safe_to_orig = _safe_key_map(orig_keys)
+
     payload: dict[str, Any] = {
         "template": full_text,
+        # Include original key names in the payload so Claude understands the semantics
         "placeholders": {str(k): str(v) for k, v in slot_values.items()},
+        # Mapping tells Claude which safe key corresponds to which original placeholder
+        "_key_map": {orig_to_safe[k]: str(k) for k in orig_keys},
     }
     if prompt_ai:
         payload["additional_instructions"] = str(prompt_ai)
@@ -140,14 +181,20 @@ def claude_correct_values(
     if call_log is not None:
         call_log.setdefault("claude_pass", {}).update({"model": model, "placeholder_count": len(slot_values)})
 
-    # Use tools to force structured JSON output — the only reliable way with Claude API
-    tool_schema = {
+    # Claude tool schema property keys must be ASCII — map Cyrillic keys to slot_N
+    tool_schema: dict[str, Any] = {
         "name": "corrected_placeholders",
         "description": "Return every placeholder with its grammar-corrected value.",
         "input_schema": {
             "type": "object",
-            "properties": {str(k): {"type": "string"} for k in slot_values},
-            "required": [str(k) for k in slot_values],
+            "properties": {
+                orig_to_safe[k]: {
+                    "type": "string",
+                    "description": f"Corrected value for placeholder '{k}'",
+                }
+                for k in orig_keys
+            },
+            "required": [orig_to_safe[k] for k in orig_keys],
             "additionalProperties": False,
         },
     }
@@ -169,15 +216,7 @@ def claude_correct_values(
         log_key, stop_reason,
     )
 
-    # Extract tool_use block input
-    parsed: Any = None
-    for block in getattr(response, "content", []) or []:
-        if getattr(block, "type", None) == "tool_use":
-            parsed = getattr(block, "input", None)
-            break
-        if isinstance(block, dict) and block.get("type") == "tool_use":
-            parsed = block.get("input")
-            break
+    parsed: Any = _extract_tool_input(response)
 
     if parsed is None:
         raw_fallback = _response_text(response)
@@ -190,7 +229,13 @@ def claude_correct_values(
     if not isinstance(parsed, dict):
         raise ValueError(f"Claude tool input is not a dict: {parsed!r}")
 
-    corrected = {str(k): str(v) for k, v in parsed.items() if k in slot_values}
+    # Remap safe keys back to original Cyrillic keys
+    corrected: dict[str, str] = {}
+    for safe_k, val in parsed.items():
+        orig_k = safe_to_orig.get(safe_k)
+        if orig_k is not None:
+            corrected[orig_k] = str(val)
+
     missing = sorted(set(slot_values) - set(corrected))
     if missing:
         logger.warning("Claude missing keys: log_key=%s missing=%s", log_key, missing)
@@ -203,9 +248,23 @@ def claude_correct_values(
     return corrected, summary
 
 
-def _schema_for_keys(keys: list[str]) -> dict[str, Any]:
-    corrected_properties = {key: {"type": "string"} for key in keys}
-    changed_item_schema = {
+def _schema_for_keys(keys: list[str]) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
+    """Build an Anthropic tool schema for claude_correct_and_review.
+
+    Returns (tool_dict, orig_to_safe, safe_to_orig).  Cyrillic keys are mapped to
+    ASCII slot_N names so they satisfy Claude's ^[a-zA-Z0-9_.-]{1,64}$ constraint.
+    """
+    orig_to_safe = {k: f"slot_{i}" for i, k in enumerate(keys)}
+    safe_to_orig = {v: k for k, v in orig_to_safe.items()}
+
+    corrected_properties = {
+        orig_to_safe[k]: {
+            "type": "string",
+            "description": f"Corrected value for placeholder '{k}'",
+        }
+        for k in keys
+    }
+    changed_item_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "placeholder": {"type": "string"},
@@ -214,19 +273,17 @@ def _schema_for_keys(keys: list[str]) -> dict[str, Any]:
             "reason": {"type": "string"},
         },
         "required": ["placeholder", "gpt_value", "claude_value", "reason"],
-        "additionalProperties": False,
     }
-    return {
+    tool: dict[str, Any] = {
         "name": "claude_correct_and_review",
-        "strict": True,
-        "schema": {
+        "description": "Return corrected placeholder values and a review summary.",
+        "input_schema": {
             "type": "object",
             "properties": {
                 "corrected_values": {
                     "type": "object",
                     "properties": corrected_properties,
-                    "required": keys,
-                    "additionalProperties": False,
+                    "required": list(orig_to_safe.values()),
                 },
                 "review_summary": {
                     "type": "object",
@@ -236,13 +293,12 @@ def _schema_for_keys(keys: list[str]) -> dict[str, Any]:
                         "note": {"type": "string"},
                     },
                     "required": ["had_issues", "changes_from_gpt", "note"],
-                    "additionalProperties": False,
                 },
             },
             "required": ["corrected_values", "review_summary"],
-            "additionalProperties": False,
         },
     }
+    return tool, orig_to_safe, safe_to_orig
 
 
 def claude_correct_and_review(
@@ -261,12 +317,16 @@ def claude_correct_and_review(
     if not keys:
         return {"corrected_values": {}, "review_summary": {"had_issues": False, "changes_from_gpt": [], "note": "No placeholders to review."}}
 
+    tool, orig_to_safe, safe_to_orig = _schema_for_keys(keys)
+
     user_content: dict[str, Any] = {
         "original_params": {
             "template": template,
             "placeholders": {str(k): str(v) for k, v in placeholders.items()},
         },
         "gpt_response": {str(k): str(v) for k, v in gpt_response.items()},
+        # Let Claude know which safe key corresponds to which original placeholder
+        "_key_map": {orig_to_safe[k]: k for k in keys},
     }
     if known_pitfalls:
         user_content["known_pitfalls"] = [
@@ -278,7 +338,6 @@ def claude_correct_and_review(
             for item in known_pitfalls
         ]
 
-    schema = _schema_for_keys(keys)
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
@@ -288,20 +347,32 @@ def claude_correct_and_review(
                 system=CLAUDE_CORRECT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": json.dumps(user_content, ensure_ascii=False, indent=2)}],
                 temperature=0,
-                response_format={"type": "json_schema", "json_schema": schema},
+                tools=[tool],
+                tool_choice={"type": "tool", "name": "claude_correct_and_review"},
             )
-            parsed = json.loads(_strip_json_fence(_response_text(response)))
+
+            parsed = _extract_tool_input(response)
+            if parsed is None:
+                raise ValueError("Claude returned no tool_use block")
             if not isinstance(parsed, dict):
-                raise ValueError("Claude correction response is not a JSON object")
-            corrected_values = parsed.get("corrected_values")
+                raise ValueError(f"Claude tool input is not a dict: {parsed!r}")
+
+            corrected_safe = parsed.get("corrected_values")
             review_summary = parsed.get("review_summary")
-            if not isinstance(corrected_values, dict) or not isinstance(review_summary, dict):
+            if not isinstance(corrected_safe, dict) or not isinstance(review_summary, dict):
                 raise ValueError("Claude correction response missing required objects")
-            expected = sorted(keys)
-            got = sorted(str(k) for k in corrected_values.keys())
-            if expected != got:
-                raise ValueError(f"Claude correction key mismatch: expected {expected}, got {got}")
-            cleaned_corrected = {str(k): str(corrected_values[k]) for k in keys}
+
+            # Remap safe keys → original Cyrillic keys
+            cleaned_corrected: dict[str, str] = {}
+            for safe_k, val in corrected_safe.items():
+                orig_k = safe_to_orig.get(safe_k)
+                if orig_k is not None:
+                    cleaned_corrected[orig_k] = str(val)
+
+            missing = sorted(set(keys) - set(cleaned_corrected))
+            if missing:
+                raise ValueError(f"Claude correction key mismatch: missing {missing}")
+
             changes = review_summary.get("changes_from_gpt") or []
             if not isinstance(changes, list):
                 raise ValueError("Claude review_summary.changes_from_gpt must be a list")
@@ -389,12 +460,24 @@ def claude_correct_occurrences(
                 system=CLAUDE_OCCURRENCE_CORRECTION_PROMPT,
                 messages=[{"role": "user", "content": body}],
                 temperature=0,
+                tools=[_OCCURRENCE_TOOL],
+                tool_choice={"type": "tool", "name": "corrected_occurrences"},
                 timeout=timeout_seconds,
             )
-            raw_text = _response_text(response)
-            logger.info("Claude occurrence response: log_key=%s text=%s", log_key, raw_text[:500])
 
-            parsed = json.loads(_strip_json_fence(raw_text))
+            parsed = _extract_tool_input(response)
+
+            if parsed is None:
+                # Fallback: try parsing text response (older behavior)
+                raw_text = _response_text(response)
+                if not raw_text:
+                    raise ValueError("Claude returned no tool_use block and no text content")
+                logger.warning(
+                    "Claude occurrence: no tool_use block, trying text fallback: log_key=%s raw=%r",
+                    log_key, raw_text[:300],
+                )
+                parsed = json.loads(_strip_json_fence(raw_text))
+
             if not isinstance(parsed, dict):
                 raise ValueError("Claude occurrence response is not a JSON object")
 
